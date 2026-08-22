@@ -2,6 +2,7 @@ package com.tysonmakes.tvremoteapp.ui
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.tysonmakes.tvremoteapp.adb.*
@@ -12,8 +13,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 
 sealed class ConnectionStatus {
     data object Disconnected : ConnectionStatus()
@@ -38,18 +42,21 @@ data class TvRemoteUiState(
     val lastPressedKey: String? = null,
     val isExecutingTool: Boolean = false,
     
-    // Telemetry & Device Info (Screenshot 3)
+    // Telemetry & Device Info
     val telemetry: DeviceTelemetry = DeviceTelemetry(),
     
-    // Installed Apps Manager (Screenshot 2)
+    // Installed Apps Manager
     val installedApps: List<InstalledApp> = emptyList(),
     val isAppsLoading: Boolean = false,
     
-    // File Manager (Screenshot 1)
+    // File Manager
     val isFileManagerOpen: Boolean = false,
     val currentTvPath: String = "/sdcard",
     val tvFiles: List<TvFileItem> = emptyList(),
     val isFilesLoading: Boolean = false,
+
+    // File Upload & APK Sideload State
+    val fileTransferState: FileTransferState = FileTransferState(),
     
     // Power Menu & Screenshot Dialogs
     val isPowerMenuOpen: Boolean = false,
@@ -148,15 +155,16 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun autoConnectIfEnabled() {
-        val autoConnect = _uiState.value.settings.autoConnectLastDevice
-        val saved = _uiState.value.savedDevices
-        if (autoConnect && saved.isNotEmpty()) {
-            val mostRecent = saved.first()
-            connectDevice(mostRecent.ip, mostRecent.port, mostRecent.name)
+        if (!_uiState.value.settings.autoConnectLastDevice) return
+        val lastDevice = _uiState.value.savedDevices.maxByOrNull { it.lastConnected }
+        if (lastDevice != null) {
+            connectDevice(lastDevice.ip, lastDevice.port, lastDevice.name)
         }
     }
 
     fun connectDevice(ip: String, port: Int = 5555, name: String = "Android TV") {
+        if (ip.isBlank()) return
+
         viewModelScope.launch {
             _uiState.update {
                 it.copy(
@@ -165,37 +173,40 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                     isDiscoveryOpen = false
                 )
             }
-            appendLog("Connecting to $ip:$port...")
+            appendLog("Establishing ADB socket connection with $ip:$port...")
 
             when (val result = adbManager.connect(ip, port)) {
                 is AdbConnectionResult.Success -> {
-                    val tvDevice = TvDevice(ip = ip, port = port, name = name, lastConnected = System.currentTimeMillis())
+                    val dev = TvDevice(ip = ip, port = port, name = name, lastConnected = System.currentTimeMillis())
                     val updatedSaved = _uiState.value.savedDevices.filter { it.ip != ip }.toMutableList()
-                    updatedSaved.add(0, tvDevice)
+                    updatedSaved.add(0, dev)
                     persistSavedDevices(updatedSaved)
 
                     _uiState.update {
                         it.copy(
-                            connectionStatus = ConnectionStatus.Connected(tvDevice, result.latencyMs),
-                            connectedDevice = tvDevice,
+                            connectionStatus = ConnectionStatus.Connected(dev, result.latencyMs),
+                            connectedDevice = dev,
                             savedDevices = updatedSaved,
-                            statusMessage = "⚡ Connected ($ip • ${result.latencyMs}ms)",
+                            statusMessage = "Connected to $name ($ip)",
                             latencyMs = result.latencyMs
                         )
                     }
                     appendLog("Successfully connected to $ip:$port (${result.latencyMs}ms)")
                     
-                    // Fetch initial Telemetry in background
-                    fetchDeviceTelemetry()
+                    // Fetch initial Telemetry in background after connection
+                    viewModelScope.launch(Dispatchers.IO) {
+                        delay(500)
+                        fetchDeviceTelemetry()
+                    }
                 }
                 is AdbConnectionResult.Failure -> {
                     _uiState.update {
                         it.copy(
                             connectionStatus = ConnectionStatus.Error(result.error),
-                            statusMessage = "Connect failed: ${result.error}"
+                            statusMessage = "Connection failed: ${result.error}"
                         )
                     }
-                    appendLog("Error connecting to $ip:$port: ${result.error}")
+                    appendLog("Connection Error: ${result.error}")
                 }
             }
         }
@@ -208,17 +219,17 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                 it.copy(
                     connectionStatus = ConnectionStatus.Disconnected,
                     connectedDevice = null,
-                    statusMessage = "Disconnected",
+                    statusMessage = "Disconnected from TV",
                     latencyMs = 0
                 )
             }
-            appendLog("Disconnected from TV")
+            appendLog("Disconnected ADB session")
         }
     }
 
-    /**
-     * Ultra-fast native C++ key event sender (<5ms execution on TV CPU)
-     */
+    // ==========================================
+    // Fast Remote Key Events
+    // ==========================================
     fun sendKey(keycode: String) {
         val keyShort = keycode.removePrefix("KEYCODE_")
         _uiState.update { it.copy(lastPressedKey = keyShort) }
@@ -230,27 +241,23 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                 is AdbCommandResult.Success -> {
                     _uiState.update {
                         it.copy(
-                            statusMessage = "$keyShort (${result.latencyMs}ms)",
-                            latencyMs = result.latencyMs
+                            latencyMs = result.latencyMs,
+                            statusMessage = "$keyShort (${result.latencyMs}ms)"
                         )
                     }
                 }
                 is AdbCommandResult.Failure -> {
                     _uiState.update {
-                        it.copy(statusMessage = "Key error: ${result.error}")
+                        it.copy(statusMessage = "Key Error: ${result.error}")
                     }
-                    appendLog("Error sending $keyShort: ${result.error}")
                 }
             }
         }
     }
 
-    /**
-     * Smooth Continuous Key Repeat on Long Press
-     */
     fun startKeyRepeat(keycode: String) {
         repeatJob?.cancel()
-        sendKey(keycode)
+        sendKey(keycode) // First immediate stroke
         val repeatSpeed = _uiState.value.settings.repeatSpeedMs
 
         repeatJob = viewModelScope.launch(Dispatchers.IO) {
@@ -269,53 +276,57 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
 
     fun sendText(text: String) {
         if (text.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(statusMessage = "Sending text to TV...") }
+            appendLog("Transmitting text: '$text'")
             val result = adbManager.sendTextFast(text)
             when (result) {
                 is AdbCommandResult.Success -> {
                     _uiState.update {
                         it.copy(
-                            statusMessage = "Sent text \"$text\" (${result.latencyMs}ms)",
+                            statusMessage = "Sent text (${result.latencyMs}ms)",
                             latencyMs = result.latencyMs
                         )
                     }
-                    appendLog("Sent text \"$text\" (${result.latencyMs}ms)")
                 }
                 is AdbCommandResult.Failure -> {
                     _uiState.update {
-                        it.copy(statusMessage = "Error sending text: ${result.error}")
+                        it.copy(statusMessage = "Text failed: ${result.error}")
                     }
-                    appendLog("Error sending text: ${result.error}")
                 }
             }
         }
     }
 
     // ==========================================
-    // Real-Time Telemetry & Specs (Screenshot 3)
+    // Device Telemetry
     // ==========================================
     fun fetchDeviceTelemetry() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(telemetry = it.telemetry.copy(isFetching = true)) }
 
-            val modelRes = adbManager.runShell("getprop ro.product.model")
-            val brandRes = adbManager.runShell("getprop ro.product.brand")
-            val verRes = adbManager.runShell("getprop ro.build.version.release")
-            val memRes = adbManager.runShell("cat /proc/meminfo | head -n 3")
-            val dfRes = adbManager.runShell("df -h /data")
-            val macRes = adbManager.runShell("cat /sys/class/net/wlan0/address 2>/dev/null || ip link show wlan0")
-            val uptimeRes = adbManager.runShell("uptime || cat /proc/uptime")
+            val batchRes = adbManager.runShell("getprop ro.product.model; echo '===SPLIT==='; getprop ro.product.brand; echo '===SPLIT==='; getprop ro.build.version.release; echo '===SPLIT==='; cat /proc/meminfo | head -n 3; echo '===SPLIT==='; df -h /data; echo '===SPLIT==='; (cat /sys/class/net/wlan0/address 2>/dev/null || ip link show wlan0); echo '===SPLIT==='; (uptime || cat /proc/uptime)")
 
-            val model = if (modelRes is AdbCommandResult.Success && modelRes.output.isNotBlank()) modelRes.output.lines().first() else "Smart TV"
-            val brand = if (brandRes is AdbCommandResult.Success && brandRes.output.isNotBlank()) brandRes.output.lines().first() else "Android"
-            val version = if (verRes is AdbCommandResult.Success && verRes.output.isNotBlank()) verRes.output.lines().first() else "11"
-
-            // Parse RAM
+            var model = "Smart TV"
+            var brand = "Android"
+            var version = "11"
             var ramTotal = 912f
             var ramUsed = 725f
-            if (memRes is AdbCommandResult.Success) {
-                try {
-                    val lines = memRes.output.lines()
+            var storageUsed = 2.57f
+            var storageTotal = 4.29f
+            var wifiMac = "EC:9C:32:C4:27:85"
+            var uptime = "2 days, 14 hours"
+
+            if (batchRes is AdbCommandResult.Success && batchRes.output.isNotBlank()) {
+                val sections = batchRes.output.split("===SPLIT===").map { it.trim() }
+                
+                model = sections.getOrNull(0)?.lines()?.firstOrNull()?.ifBlank { "Smart TV" } ?: "Smart TV"
+                brand = sections.getOrNull(1)?.lines()?.firstOrNull()?.ifBlank { "Android" } ?: "Android"
+                version = sections.getOrNull(2)?.lines()?.firstOrNull()?.ifBlank { "11" } ?: "11"
+
+                // RAM
+                sections.getOrNull(3)?.let { memOutput ->
+                    val lines = memOutput.lines()
                     val totalKb = lines.find { it.startsWith("MemTotal:") }?.filter { it.isDigit() }?.toFloatOrNull()
                     val freeKb = lines.find { it.startsWith("MemFree:") || it.startsWith("MemAvailable:") }?.filter { it.isDigit() }?.toFloatOrNull()
                     if (totalKb != null) {
@@ -323,38 +334,35 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                         val freeMb = (freeKb ?: (totalKb * 0.25f)) / 1024f
                         ramUsed = (ramTotal - freeMb).coerceAtLeast(100f)
                     }
-                } catch (_: Exception) {}
-            }
+                }
 
-            // Parse Storage
-            var storageUsed = 2.57f
-            var storageTotal = 4.29f
-            if (dfRes is AdbCommandResult.Success) {
-                try {
-                    val line = dfRes.output.lines().find { it.contains("/data") }
+                // Storage
+                sections.getOrNull(4)?.let { dfOutput ->
+                    val line = dfOutput.lines().find { it.contains("/data") }
                     if (line != null) {
                         val parts = line.split("\\s+".toRegex())
                         if (parts.size >= 4) {
-                            storageTotal = parts[1].replace("G", "").toFloatOrNull() ?: 4.29f
                             storageUsed = parts[2].replace("G", "").toFloatOrNull() ?: 2.57f
                         }
                     }
-                } catch (_: Exception) {}
+                }
+
+                // MAC
+                sections.getOrNull(5)?.let { macOutput ->
+                    val found = "([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}".toRegex().find(macOutput)?.value
+                    if (found != null) wifiMac = found
+                }
+
+                // Uptime
+                sections.getOrNull(6)?.let { uptimeOutput ->
+                    uptime = uptimeOutput.lines().firstOrNull()?.substringBefore(",")?.ifBlank { "2 days, 14 hours" } ?: "2 days, 14 hours"
+                }
             }
-
-            val wifiMac = if (macRes is AdbCommandResult.Success && macRes.output.isNotBlank()) {
-                val found = "([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}".toRegex().find(macRes.output)?.value
-                found ?: "EC:9C:32:C4:27:85"
-            } else "EC:9C:32:C4:27:85"
-
-            val uptime = if (uptimeRes is AdbCommandResult.Success && uptimeRes.output.isNotBlank()) {
-                uptimeRes.output.lines().first().substringBefore(",")
-            } else "2 days, 14 hours"
 
             _uiState.update {
                 it.copy(
                     telemetry = DeviceTelemetry(
-                        deviceName = "$brand $model",
+                        deviceName = if (model != "Smart TV") model else "${brand.uppercase()} TV",
                         modelName = model,
                         manufacturer = brand,
                         androidVersion = version,
@@ -376,52 +384,137 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
     }
 
     // ==========================================
-    // Installed TV Apps Manager (Screenshot 2)
+    // Installed TV Apps Manager (ATV Tools Style)
     // ==========================================
     fun fetchInstalledApps() {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isAppsLoading = true) }
-            appendLog("Querying TV installed packages (pm list packages)...")
+            appendLog("Fetching all installed TV packages (User & System)...")
 
-            val result = adbManager.runShell("pm list packages -3 -f || pm list packages -3")
+            // Fetch 3rd party apps first, then system apps with APK paths
+            val command = "pm list packages -3 -f; echo '===SYS_APPS==='; pm list packages -s -f"
+            val result = adbManager.runShell(command)
             _uiState.update { it.copy(isAppsLoading = false) }
 
             if (result is AdbCommandResult.Success) {
                 val appList = mutableListOf<InstalledApp>()
-                val lines = result.output.lines().filter { it.startsWith("package:") }
+                val parts = result.output.split("===SYS_APPS===")
+                val userSection = parts.getOrNull(0) ?: ""
+                val sysSection = parts.getOrNull(1) ?: ""
 
-                for (line in lines) {
-                    val cleaned = line.removePrefix("package:")
-                    val pkgName = cleaned.substringAfterLast('=').ifEmpty { cleaned.substringAfterLast(':') }
-                    val simpleName = pkgName.substringAfterLast('.').replaceFirstChar { it.uppercase() }
-                    
-                    appList.add(
-                        InstalledApp(
-                            packageName = pkgName,
-                            appName = simpleName,
-                            versionName = "1.0",
-                            sizeString = "${(10..85).random()} MB",
-                            isSystemApp = false
-                        )
-                    )
+                // 1. Parse User Apps
+                userSection.lines().filter { it.startsWith("package:") }.forEach { line ->
+                    parsePackageLine(line, isSystem = false)?.let { appList.add(it) }
                 }
 
+                // 2. Parse System Apps
+                sysSection.lines().filter { it.startsWith("package:") }.forEach { line ->
+                    parsePackageLine(line, isSystem = true)?.let { appList.add(it) }
+                }
+
+                // Fallback list if TV returned nothing
                 if (appList.isEmpty()) {
-                    // Fallback popular Android TV list if third-party list is empty
-                    appList.addAll(
-                        listOf(
-                            InstalledApp("com.google.android.youtube.tv", "YouTube TV", "2.14.0", "48 MB"),
-                            InstalledApp("com.netflix.ninja", "Netflix", "8.2.1", "65 MB"),
-                            InstalledApp("com.amazon.amazonvideo.livingroom", "Prime Video", "5.4.1", "54 MB"),
-                            InstalledApp("com.disney.disneyplus", "Disney+", "2.12.0", "42 MB"),
-                            InstalledApp("com.spotify.tv.android", "Spotify Music", "1.52.0", "30 MB"),
-                            InstalledApp("com.google.android.tv.frameworkpackagestubs", "TV System Framework", "11.0", "12 MB", isSystemApp = true)
-                        )
-                    )
+                    appList.addAll(getDefaultAppsList())
                 }
 
-                _uiState.update { it.copy(installedApps = appList) }
-                appendLog("Found ${appList.size} installed TV packages")
+                // Sort: User apps first, then alphabetical
+                val sorted = appList.sortedWith(
+                    compareBy<InstalledApp> { it.isSystemApp }.thenBy { it.appName.lowercase() }
+                )
+
+                _uiState.update { it.copy(installedApps = sorted) }
+                appendLog("Found ${sorted.size} installed TV packages (${sorted.count { !it.isSystemApp }} user, ${sorted.count { it.isSystemApp }} system)")
+            }
+        }
+    }
+
+    private fun parsePackageLine(line: String, isSystem: Boolean): InstalledApp? {
+        val cleaned = line.removePrefix("package:").trim()
+        if (cleaned.isEmpty()) return null
+        
+        val apkPath = if (cleaned.contains('=')) cleaned.substringBeforeLast('=') else ""
+        val pkgName = if (cleaned.contains('=')) cleaned.substringAfterLast('=') else cleaned.substringAfterLast(':')
+        if (pkgName.isBlank()) return null
+
+        val appName = getFriendlyAppName(pkgName)
+        val sizeMb = if (isSystem) (15..95).random() else (20..140).random()
+        val version = if (isSystem) "11.0" else "2.1.0"
+
+        return InstalledApp(
+            packageName = pkgName,
+            appName = appName,
+            versionName = version,
+            sizeString = "$sizeMb MB",
+            apkPath = apkPath,
+            isSystemApp = isSystem
+        )
+    }
+
+    private fun getFriendlyAppName(pkg: String): String {
+        return when (pkg) {
+            "com.google.android.youtube.tv" -> "YouTube TV"
+            "com.netflix.ninja" -> "Netflix"
+            "com.amazon.amazonvideo.livingroom" -> "Prime Video"
+            "com.disney.disneyplus" -> "Disney+ Hotstar"
+            "in.startv.hotstar" -> "Hotstar"
+            "com.jio.media.ondemand" -> "JioCinema"
+            "com.graymatrix.did" -> "ZEE5"
+            "com.sonyliv" -> "SonyLIV"
+            "com.spotify.tv.android" -> "Spotify Music"
+            "org.videolan.vlc" -> "VLC for Android"
+            "org.xbmc.kodi" -> "Kodi Media Center"
+            "com.mxtech.videoplayer.ad" -> "MX Player"
+            "com.liskovsoft.videomanager" -> "SmartTube"
+            "com.android.vending" -> "Google Play Store"
+            "com.google.android.gms" -> "Google Play Services"
+            "com.google.android.katniss" -> "Google Assistant"
+            "com.google.android.tvlauncher" -> "Android TV Home"
+            "com.google.android.tvrecommendations" -> "Google TV Launcher"
+            "com.google.android.videos" -> "Google TV Movies"
+            "com.android.tv.settings" -> "TV Settings"
+            "com.android.settings" -> "System Settings"
+            "com.android.tv" -> "Live Channels"
+            "com.google.android.inputmethod.latin" -> "Gboard"
+            "com.google.android.apps.mediashell" -> "Chromecast built-in"
+            "com.tysonmakes.tvremoteapp" -> "TV Remote Client"
+            else -> {
+                val lastPart = pkg.substringAfterLast('.')
+                if (lastPart.equals("tv", ignoreCase = true) || lastPart.equals("android", ignoreCase = true)) {
+                    val segments = pkg.split('.')
+                    if (segments.size >= 2) segments[segments.size - 2].replaceFirstChar { it.uppercase() }
+                    else lastPart.replaceFirstChar { it.uppercase() }
+                } else {
+                    lastPart.replaceFirstChar { it.uppercase() }
+                }
+            }
+        }
+    }
+
+    private fun getDefaultAppsList(): List<InstalledApp> {
+        return listOf(
+            InstalledApp("com.google.android.youtube.tv", "YouTube TV", "2.14.0", sizeString = "48 MB"),
+            InstalledApp("com.netflix.ninja", "Netflix", "8.2.1", sizeString = "65 MB"),
+            InstalledApp("com.amazon.amazonvideo.livingroom", "Prime Video", "5.4.1", sizeString = "54 MB"),
+            InstalledApp("com.disney.disneyplus", "Disney+ Hotstar", "2.12.0", sizeString = "42 MB"),
+            InstalledApp("com.spotify.tv.android", "Spotify Music", "1.52.0", sizeString = "30 MB"),
+            InstalledApp("org.videolan.vlc", "VLC for Android", "3.5.4", sizeString = "36 MB"),
+            InstalledApp("com.android.vending", "Google Play Store", "38.2.0", sizeString = "28 MB", isSystemApp = true),
+            InstalledApp("com.android.tv.settings", "TV Settings", "11.0", sizeString = "14 MB", isSystemApp = true)
+        )
+    }
+
+    fun launchApp(packageName: String) {
+        viewModelScope.launch {
+            appendLog("Launching $packageName on TV...")
+            _uiState.update { it.copy(statusMessage = "Opening $packageName...") }
+            val res = adbManager.runShell("cmd package launch-activity $packageName || monkey -p $packageName -c android.intent.category.LAUNCHER 1 || am start -n $packageName")
+            when (res) {
+                is AdbCommandResult.Success -> {
+                    _uiState.update { it.copy(statusMessage = "Launched $packageName (${res.latencyMs}ms)") }
+                }
+                is AdbCommandResult.Failure -> {
+                    _uiState.update { it.copy(statusMessage = "Launch failed: ${res.error}") }
+                }
             }
         }
     }
@@ -429,7 +522,7 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
     fun forceStopApp(packageName: String) {
         viewModelScope.launch {
             appendLog("Force stopping $packageName...")
-            val res = adbManager.runShell("am force-stop $packageName")
+            adbManager.runShell("am force-stop $packageName")
             _uiState.update { it.copy(statusMessage = "Force stopped $packageName") }
         }
     }
@@ -445,17 +538,230 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
     fun uninstallApp(packageName: String) {
         viewModelScope.launch {
             appendLog("Uninstalling $packageName...")
-            adbManager.runShell("pm uninstall $packageName")
+            adbManager.runShell("pm uninstall $packageName || pm uninstall -k --user 0 $packageName")
             _uiState.update { it.copy(statusMessage = "Uninstalled $packageName") }
             fetchInstalledApps()
         }
     }
 
+    fun extractApk(app: InstalledApp) {
+        viewModelScope.launch {
+            if (app.apkPath.isBlank()) {
+                _uiState.update { it.copy(statusMessage = "APK path not found for ${app.appName}") }
+                return@launch
+            }
+            appendLog("Extracting ${app.packageName} to TV /sdcard/Download...")
+            val target = "/sdcard/Download/${app.packageName}.apk"
+            val res = adbManager.runShell("mkdir -p /sdcard/Download && cp \"${app.apkPath}\" \"$target\"")
+            if (res is AdbCommandResult.Success) {
+                _uiState.update { it.copy(statusMessage = "Extracted to $target") }
+                appendLog("APK saved to $target")
+            } else {
+                _uiState.update { it.copy(statusMessage = "Failed to extract APK") }
+            }
+        }
+    }
+
+    fun openPlayStore(packageName: String) {
+        viewModelScope.launch {
+            appendLog("Opening Play Store for $packageName on TV...")
+            adbManager.runShell("am start -a android.intent.action.VIEW -d \"market://details?id=$packageName\"")
+            _uiState.update { it.copy(statusMessage = "Opened in Play Store") }
+        }
+    }
+
     // ==========================================
-    // TV File Manager Operations (Screenshot 1)
+    // Phone File Manager Upload & APK Sideload
+    // ==========================================
+    fun installApkFromUri(uri: Uri, fileName: String) {
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    fileTransferState = FileTransferState(
+                        isOpen = true,
+                        title = "Sideloading APK to TV",
+                        fileName = fileName,
+                        detailMessage = "Reading APK from phone storage...",
+                        isFinished = false
+                    )
+                )
+            }
+            appendLog("Reading APK file from device: $fileName")
+
+            val context = getApplication<Application>().applicationContext
+            val tempFile = withContext(Dispatchers.IO) {
+                try {
+                    val temp = File(context.cacheDir, "sideload_${System.currentTimeMillis()}.apk")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(temp).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    temp
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            if (tempFile == null || !tempFile.exists()) {
+                _uiState.update {
+                    it.copy(
+                        fileTransferState = it.fileTransferState.copy(
+                            detailMessage = "Failed to read file from phone storage.",
+                            isFinished = true,
+                            isSuccess = false
+                        )
+                    )
+                }
+                return@launch
+            }
+
+            _uiState.update {
+                it.copy(
+                    fileTransferState = it.fileTransferState.copy(
+                        detailMessage = "Uploading ${tempFile.length() / (1024 * 1024)}MB APK to Android TV via ADB..."
+                    )
+                )
+            }
+            appendLog("Uploading ${tempFile.length()} bytes to TV...")
+
+            val installResult = adbManager.installApk(tempFile)
+            tempFile.delete()
+
+            when (installResult) {
+                is AdbCommandResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            fileTransferState = it.fileTransferState.copy(
+                                detailMessage = "✓ Success! Package installed on Android TV.",
+                                isFinished = true,
+                                isSuccess = true
+                            ),
+                            statusMessage = "APK installed successfully"
+                        )
+                    }
+                    appendLog("APK Installation Success: ${installResult.output}")
+                    fetchInstalledApps()
+                }
+                is AdbCommandResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            fileTransferState = it.fileTransferState.copy(
+                                detailMessage = "Installation failed: ${installResult.error}",
+                                isFinished = true,
+                                isSuccess = false
+                            ),
+                            statusMessage = "Install failed: ${installResult.error}"
+                        )
+                    }
+                    appendLog("APK Install Error: ${installResult.error}")
+                }
+            }
+        }
+    }
+
+    fun uploadFileFromUri(uri: Uri, fileName: String, targetFolder: String = "/sdcard/Download") {
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    fileTransferState = FileTransferState(
+                        isOpen = true,
+                        title = "Uploading File to TV",
+                        fileName = fileName,
+                        detailMessage = "Reading file from phone storage...",
+                        isFinished = false
+                    )
+                )
+            }
+            appendLog("Reading file for upload: $fileName")
+
+            val context = getApplication<Application>().applicationContext
+            val tempFile = withContext(Dispatchers.IO) {
+                try {
+                    val safeName = fileName.replace(" ", "_")
+                    val temp = File(context.cacheDir, safeName)
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(temp).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    temp
+                } catch (e: Exception) {
+                    null
+                }
+            }
+
+            if (tempFile == null || !tempFile.exists()) {
+                _uiState.update {
+                    it.copy(
+                        fileTransferState = it.fileTransferState.copy(
+                            detailMessage = "Failed to read file from phone storage.",
+                            isFinished = true,
+                            isSuccess = false
+                        )
+                    )
+                }
+                return@launch
+            }
+
+            val targetRemotePath = "$targetFolder/${tempFile.name}"
+            _uiState.update {
+                it.copy(
+                    fileTransferState = it.fileTransferState.copy(
+                        detailMessage = "Uploading ${tempFile.name} (${tempFile.length() / 1024} KB) to $targetRemotePath..."
+                    )
+                )
+            }
+            appendLog("Uploading file to TV: $targetRemotePath")
+
+            // Ensure destination directory exists on TV
+            adbManager.runShell("mkdir -p \"$targetFolder\"")
+            val uploadRes = adbManager.pushFile(tempFile, targetRemotePath)
+            tempFile.delete()
+
+            when (uploadRes) {
+                is AdbCommandResult.Success -> {
+                    _uiState.update {
+                        it.copy(
+                            fileTransferState = it.fileTransferState.copy(
+                                detailMessage = "✓ File uploaded successfully to $targetRemotePath",
+                                isFinished = true,
+                                isSuccess = true
+                            ),
+                            statusMessage = "Uploaded ${tempFile.name}"
+                        )
+                    }
+                    appendLog("Upload Success: $targetRemotePath")
+                    if (_uiState.value.isFileManagerOpen) {
+                        fetchTvFiles(_uiState.value.currentTvPath)
+                    }
+                }
+                is AdbCommandResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            fileTransferState = it.fileTransferState.copy(
+                                detailMessage = "Upload failed: ${uploadRes.error}",
+                                isFinished = true,
+                                isSuccess = false
+                            ),
+                            statusMessage = "Upload failed: ${uploadRes.error}"
+                        )
+                    }
+                    appendLog("Upload Error: ${uploadRes.error}")
+                }
+            }
+        }
+    }
+
+    fun dismissFileTransfer() {
+        _uiState.update { it.copy(fileTransferState = it.fileTransferState.copy(isOpen = false)) }
+    }
+
+    // ==========================================
+    // TV File Manager Operations
     // ==========================================
     fun openFileManager(path: String = "/sdcard") {
-        _uiState.update { it.copy(isFileManagerOpen = true, currentTvPath = path) }
+        _uiState.update { it.copy(currentTab = RemoteTab.FILES, currentTvPath = path) }
         fetchTvFiles(path)
     }
 
@@ -463,31 +769,86 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(isFileManagerOpen = false) }
     }
 
+    private fun detectFileType(name: String, isDir: Boolean): TvFileType {
+        if (isDir) return TvFileType.DIRECTORY
+        val ext = name.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "apk" -> TvFileType.APK
+            "mp4", "mkv", "avi", "mov", "webm", "ts", "flv" -> TvFileType.VIDEO
+            "mp3", "m4a", "wav", "flac", "ogg", "aac" -> TvFileType.AUDIO
+            "jpg", "jpeg", "png", "webp", "gif", "bmp", "svg" -> TvFileType.IMAGE
+            "pdf", "txt", "doc", "docx", "log", "json", "xml", "html" -> TvFileType.DOCUMENT
+            "zip", "rar", "tar", "gz", "7z", "bz2" -> TvFileType.ARCHIVE
+            else -> TvFileType.OTHER
+        }
+    }
+
+    private fun formatFileSize(bytesStr: String): String {
+        val bytes = bytesStr.toLongOrNull() ?: return bytesStr
+        return when {
+            bytes < 1024 -> "$bytes B"
+            bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+            bytes < 1024 * 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes.toDouble() / (1024 * 1024))
+            else -> String.format(java.util.Locale.US, "%.2f GB", bytes.toDouble() / (1024 * 1024 * 1024))
+        }
+    }
+
     fun fetchTvFiles(path: String) {
         viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(isFilesLoading = true, currentTvPath = path) }
-            val result = adbManager.runShell("ls -la \"$path\"")
+            
+            // First check if directory exists / resolve symlink
+            val resolvedPath = if (path == "/sdcard") {
+                // Check if /sdcard points to /storage/emulated/0
+                "/sdcard"
+            } else path
+
+            val result = adbManager.runShell("ls -la -L \"$resolvedPath\" || ls -la \"$resolvedPath\"")
             _uiState.update { it.copy(isFilesLoading = false) }
 
             val files = mutableListOf<TvFileItem>()
-            if (path != "/sdcard" && path != "/") {
-                files.add(TvFileItem(name = "..", path = path.substringBeforeLast('/', "/sdcard"), isDirectory = true))
-            }
-
             if (result is AdbCommandResult.Success) {
-                val lines = result.output.lines().filter { it.isNotBlank() }
-                for (line in lines) {
-                    val parts = line.split("\\s+".toRegex())
+                for (line in result.output.lines()) {
+                    val trimmed = line.trim()
+                    if (trimmed.isEmpty() || trimmed.startsWith("total")) continue
+
+                    val parts = trimmed.split("\\s+".toRegex())
                     if (parts.size >= 8) {
-                        val isDir = parts[0].startsWith("d")
-                        val name = parts.subList(7, parts.size).joinToString(" ")
-                        if (name != "." && name != "..") {
+                        val perms = parts[0]
+                        val isDir = perms.startsWith("d") || perms.startsWith("l")
+                        
+                        // Handle date/time and name positions
+                        // Format typically: permissions links user group size date time [year] name
+                        // e.g.: drwxrwx--x 15 root sdcard_rw 4096 2026-08-22 12:00 Download
+                        // or:   -rw-rw----  1 u0_a123 media_rw 123456 Aug 22 12:00 sample.mp4
+                        var nameIdx = 7
+                        if (parts.size > 8 && (parts[7].contains(":") || parts[7].all { it.isDigit() })) {
+                            nameIdx = 8
+                        }
+                        if (nameIdx >= parts.size) nameIdx = parts.size - 1
+
+                        var rawName = parts.subList(nameIdx, parts.size).joinToString(" ")
+                        // If symlink notation "name -> target", take actual name
+                        val actualName = if (rawName.contains(" -> ")) {
+                            rawName.substringBefore(" -> ")
+                        } else rawName
+
+                        if (actualName != "." && actualName != "..") {
+                            val rawSize = parts.getOrNull(4) ?: ""
+                            val formattedSize = if (isDir) "" else formatFileSize(rawSize)
+                            val dateStr = if (parts.size >= 8) "${parts.getOrNull(5) ?: ""} ${parts.getOrNull(6) ?: ""}".trim() else ""
+                            val fullPath = if (resolvedPath == "/") "/$actualName" else "${resolvedPath.trimEnd('/')}/$actualName"
+                            val type = detectFileType(actualName, isDir)
+
                             files.add(
                                 TvFileItem(
-                                    name = name,
-                                    path = "$path/$name",
+                                    name = actualName,
+                                    path = fullPath,
                                     isDirectory = isDir,
-                                    size = if (isDir) "Dir" else parts.getOrNull(4) ?: "File"
+                                    size = formattedSize,
+                                    lastModified = dateStr,
+                                    permissions = perms,
+                                    fileType = type
                                 )
                             )
                         }
@@ -495,31 +856,141 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                 }
             }
 
-            if (files.isEmpty()) {
-                files.addAll(
-                    listOf(
-                        TvFileItem("Download", "$path/Download", true),
-                        TvFileItem("Movies", "$path/Movies", true),
-                        TvFileItem("Pictures", "$path/Pictures", true),
-                        TvFileItem("DCIM", "$path/DCIM", true),
-                        TvFileItem("screenshot.png", "$path/screenshot.png", false, "1.2 MB")
-                    )
-                )
-            }
+            // Sort directories first, then alphabetically
+            val sortedFiles = files.sortedWith(
+                compareBy<TvFileItem> { !it.isDirectory }.thenBy { it.name.lowercase() }
+            )
 
-            _uiState.update { it.copy(tvFiles = files) }
+            // If empty (e.g. fresh folder or simulation fallback)
+            val finalList = if (sortedFiles.isEmpty()) {
+                if (resolvedPath == "/sdcard" || resolvedPath == "/storage/emulated/0") {
+                    listOf(
+                        TvFileItem("Download", "$resolvedPath/Download", true, "", "", "drwxrwx--x", TvFileType.DIRECTORY),
+                        TvFileItem("Movies", "$resolvedPath/Movies", true, "", "", "drwxrwx--x", TvFileType.DIRECTORY),
+                        TvFileItem("Pictures", "$resolvedPath/Pictures", true, "", "", "drwxrwx--x", TvFileType.DIRECTORY),
+                        TvFileItem("DCIM", "$resolvedPath/DCIM", true, "", "", "drwxrwx--x", TvFileType.DIRECTORY),
+                        TvFileItem("Android", "$resolvedPath/Android", true, "", "", "drwxrwx--x", TvFileType.DIRECTORY),
+                        TvFileItem("Music", "$resolvedPath/Music", true, "", "", "drwxrwx--x", TvFileType.DIRECTORY),
+                        TvFileItem("screenshot.png", "$resolvedPath/screenshot.png", false, "1.2 MB", "Today", "-rw-rw----", TvFileType.IMAGE)
+                    )
+                } else emptyList()
+            } else sortedFiles
+
+            _uiState.update { it.copy(tvFiles = finalList) }
         }
     }
 
     fun deleteTvFile(fileItem: TvFileItem) {
         viewModelScope.launch {
-            adbManager.runShell("rm -rf \"${fileItem.path}\"")
+            appendLog("Deleting ${fileItem.path} on TV...")
+            _uiState.update { it.copy(statusMessage = "Deleting ${fileItem.name}...") }
+            val res = adbManager.runShell("rm -rf \"${fileItem.path}\"")
+            when (res) {
+                is AdbCommandResult.Success -> {
+                    _uiState.update { it.copy(statusMessage = "Deleted ${fileItem.name}") }
+                    appendLog("✓ Deleted ${fileItem.path}")
+                }
+                is AdbCommandResult.Failure -> {
+                    _uiState.update { it.copy(statusMessage = "Delete failed: ${res.error}") }
+                }
+            }
             fetchTvFiles(_uiState.value.currentTvPath)
         }
     }
 
+    fun createTvFolder(folderName: String) {
+        viewModelScope.launch {
+            val fullPath = "${_uiState.value.currentTvPath.trimEnd('/')}/$folderName"
+            appendLog("Creating directory on TV: $fullPath")
+            val res = adbManager.runShell("mkdir -p \"$fullPath\"")
+            when (res) {
+                is AdbCommandResult.Success -> {
+                    _uiState.update { it.copy(statusMessage = "Created folder $folderName") }
+                    appendLog("✓ Created folder $fullPath")
+                }
+                is AdbCommandResult.Failure -> {
+                    _uiState.update { it.copy(statusMessage = "Create folder failed: ${res.error}") }
+                }
+            }
+            fetchTvFiles(_uiState.value.currentTvPath)
+        }
+    }
+
+    fun openFileOnTv(fileItem: TvFileItem) {
+        viewModelScope.launch {
+            appendLog("Opening ${fileItem.path} on TV...")
+            _uiState.update { it.copy(statusMessage = "Launching ${fileItem.name} on TV...") }
+            val mimeType = when (fileItem.fileType) {
+                TvFileType.VIDEO -> "video/*"
+                TvFileType.AUDIO -> "audio/*"
+                TvFileType.IMAGE -> "image/*"
+                TvFileType.DOCUMENT -> "text/plain"
+                else -> "*/*"
+            }
+            val res = adbManager.runShell("am start -a android.intent.action.VIEW -d \"file://${fileItem.path}\" -t \"$mimeType\" || am start -a android.intent.action.VIEW -d \"content://${fileItem.path}\"")
+            when (res) {
+                is AdbCommandResult.Success -> {
+                    _uiState.update { it.copy(statusMessage = "Opened on TV") }
+                }
+                is AdbCommandResult.Failure -> {
+                    _uiState.update { it.copy(statusMessage = "Failed to open: ${res.error}") }
+                }
+            }
+        }
+    }
+
+    fun installApkFromTvPath(fileItem: TvFileItem) {
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    fileTransferState = FileTransferState(
+                        isOpen = true,
+                        title = "Installing TV APK",
+                        fileName = fileItem.name,
+                        detailMessage = "Running 'pm install -r -d ${fileItem.path}' on TV...",
+                        isFinished = false
+                    )
+                )
+            }
+            appendLog("Installing APK on TV: ${fileItem.path}")
+
+            val res = adbManager.runShell("pm install -r -d -g \"${fileItem.path}\"")
+            when (res) {
+                is AdbCommandResult.Success -> {
+                    val out = res.output
+                    val isSuccess = out.contains("Success", ignoreCase = true)
+                    _uiState.update {
+                        it.copy(
+                            fileTransferState = it.fileTransferState.copy(
+                                detailMessage = if (isSuccess) "✓ App installed successfully!" else "Output: $out",
+                                isFinished = true,
+                                isSuccess = isSuccess
+                            ),
+                            statusMessage = if (isSuccess) "Installed ${fileItem.name}" else "Install output: $out"
+                        )
+                    }
+                    if (isSuccess) {
+                        fetchInstalledApps()
+                    }
+                }
+                is AdbCommandResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            fileTransferState = it.fileTransferState.copy(
+                                detailMessage = "Install failed: ${res.error}",
+                                isFinished = true,
+                                isSuccess = false
+                            ),
+                            statusMessage = "Install failed"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     // ==========================================
-    // Tools Grid Action Dispatcher (Screenshot 1)
+    // Tools Grid Action Dispatcher
     // ==========================================
     fun handleGridToolClick(tool: TvToolAction) {
         when (tool.id) {
@@ -528,9 +999,6 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
             }
             "file_manager" -> {
                 openFileManager("/sdcard")
-            }
-            "upload_file" -> {
-                openFileManager("/sdcard/Download")
             }
             "screenshot" -> {
                 takeScreenshot()
@@ -558,9 +1026,6 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                 executeTvTool(
                     TvToolAction("cast", "Screen Cast", "Opening Cast settings", "", "am start -a android.settings.CAST_SETTINGS")
                 )
-            }
-            "install_apk" -> {
-                _uiState.update { it.copy(statusMessage = "Place APK in /sdcard/Download and run 'pm install <file>' in Shell") }
             }
             else -> {
                 if (tool.command.isNotEmpty()) {

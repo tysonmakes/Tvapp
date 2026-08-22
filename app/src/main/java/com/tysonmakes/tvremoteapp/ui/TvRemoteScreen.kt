@@ -1,5 +1,8 @@
 package com.tysonmakes.tvremoteapp.ui
 
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -42,9 +46,51 @@ fun TvRemoteScreen(
     val uiState by viewModel.uiState.collectAsState()
     val haptic = LocalHapticFeedback.current
     val clipboardManager = LocalClipboardManager.current
+    val context = LocalContext.current
     var inputText by remember { mutableStateOf("") }
 
     val isConnected = uiState.connectionStatus is ConnectionStatus.Connected
+
+    // Phone File Picker for APK Installation
+    val apkPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            var fileName = "app_${System.currentTimeMillis()}.apk"
+            try {
+                context.contentResolver.query(it, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex >= 0) {
+                            cursor.getString(nameIndex)?.let { name -> fileName = name }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+            viewModel.installApkFromUri(it, fileName)
+        }
+    }
+
+    // Phone File Picker for General File Upload
+    val fileUploadLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            var fileName = "file_${System.currentTimeMillis()}"
+            try {
+                context.contentResolver.query(it, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex >= 0) {
+                            cursor.getString(nameIndex)?.let { name -> fileName = name }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+            val targetFolder = uiState.currentTvPath.ifEmpty { "/sdcard/Download" }
+            viewModel.uploadFileFromUri(it, fileName, targetFolder)
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -82,15 +128,20 @@ fun TvRemoteScreen(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // 3. Horizontal Scrollable Tab Selector Bar
+            // 3. Horizontal Scrollable Tab Selector Bar (Remote, Files, Apps, Tools, Gamepad, Info...)
             RemoteTabSelectorBar(
                 selectedTab = uiState.currentTab,
-                onTabSelect = { viewModel.setTab(it) }
+                onTabSelect = { tab ->
+                    viewModel.setTab(tab)
+                    if (tab == RemoteTab.FILES && uiState.tvFiles.isEmpty()) {
+                        viewModel.fetchTvFiles(uiState.currentTvPath.ifEmpty { "/sdcard" })
+                    }
+                }
             )
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            // 4. Center Dynamic Arena (Remote D-pad / Tools / Apps / Gamepad / Info / Trackpad / Numpad / Shell)
+            // 4. Center Dynamic Arena (Remote D-pad / Interactive Files / Apps / Tools / Gamepad / Info / Trackpad / Numpad / Shell)
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -113,10 +164,18 @@ fun TvRemoteScreen(
                                 hapticLevel = uiState.settings.hapticIntensity
                             )
                         }
-                        RemoteTab.TOOLS -> {
-                            TvToolsView(
-                                onToolClick = { viewModel.handleGridToolClick(it) },
-                                isExecuting = uiState.isExecutingTool
+                        RemoteTab.FILES -> {
+                            FileManagerView(
+                                currentPath = uiState.currentTvPath.ifEmpty { "/sdcard" },
+                                files = uiState.tvFiles,
+                                isLoading = uiState.isFilesLoading,
+                                onNavigate = { viewModel.fetchTvFiles(it) },
+                                onDeleteFile = { viewModel.deleteTvFile(it) },
+                                onOpenFileOnTv = { viewModel.openFileOnTv(it) },
+                                onInstallApkFile = { viewModel.installApkFromTvPath(it) },
+                                onUploadClick = { fileUploadLauncher.launch("*/*") },
+                                onCreateFolder = { viewModel.createTvFolder(it) },
+                                onRefresh = { viewModel.fetchTvFiles(uiState.currentTvPath.ifEmpty { "/sdcard" }) }
                             )
                         }
                         RemoteTab.APPS -> {
@@ -124,9 +183,24 @@ fun TvRemoteScreen(
                                 apps = uiState.installedApps,
                                 isLoading = uiState.isAppsLoading,
                                 onRefresh = { viewModel.fetchInstalledApps() },
+                                onLaunchApp = { viewModel.launchApp(it) },
                                 onForceStop = { viewModel.forceStopApp(it) },
                                 onClearData = { viewModel.clearAppData(it) },
-                                onUninstall = { viewModel.uninstallApp(it) }
+                                onUninstall = { viewModel.uninstallApp(it) },
+                                onExtractApk = { viewModel.extractApk(it) },
+                                onOpenPlayStore = { viewModel.openPlayStore(it) }
+                            )
+                        }
+                        RemoteTab.TOOLS -> {
+                            TvToolsView(
+                                onToolClick = { viewModel.handleGridToolClick(it) },
+                                onInstallApkClick = {
+                                    apkPickerLauncher.launch("application/vnd.android.package-archive")
+                                },
+                                onUploadFileClick = {
+                                    fileUploadLauncher.launch("*/*")
+                                },
+                                isExecuting = uiState.isExecutingTool
                             )
                         }
                         RemoteTab.GAMEPAD -> {
@@ -185,6 +259,12 @@ fun TvRemoteScreen(
         }
     }
 
+    // Dialog: File Transfer / APK Install Progress
+    FileTransferDialog(
+        transferState = uiState.fileTransferState,
+        onDismiss = { viewModel.dismissFileTransfer() }
+    )
+
     // Dialog: Network Scan & Manual Discovery
     DeviceDiscoveryDialog(
         isOpen = uiState.isDiscoveryOpen,
@@ -231,19 +311,6 @@ fun TvRemoteScreen(
         ScreenshotDialog(
             screenshotPath = uiState.lastScreenshotPath,
             onDismiss = { viewModel.setScreenshotDialogOpen(false) }
-        )
-    }
-
-    // Dialog: File Manager
-    if (uiState.isFileManagerOpen) {
-        FileManagerDialog(
-            currentPath = uiState.currentTvPath,
-            files = uiState.tvFiles,
-            isLoading = uiState.isFilesLoading,
-            onNavigate = { viewModel.fetchTvFiles(it) },
-            onDelete = { viewModel.deleteTvFile(it) },
-            onRefresh = { viewModel.fetchTvFiles(uiState.currentTvPath) },
-            onDismiss = { viewModel.closeFileManager() }
         )
     }
 }

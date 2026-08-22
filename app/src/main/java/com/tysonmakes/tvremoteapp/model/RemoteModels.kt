@@ -12,8 +12,9 @@ data class TvDevice(
 
 enum class RemoteTab(val title: String) {
     CONTROLS("Remote"),
-    TOOLS("Tools"),
+    FILES("Files"),
     APPS("Apps"),
+    TOOLS("Tools"),
     GAMEPAD("Gamepad"),
     INFO("Info"),
     TRACKPAD("Touchpad"),
@@ -29,8 +30,8 @@ enum class HapticIntensity(val label: String) {
 }
 
 enum class ResponseMode(val label: String, val description: String) {
-    TURBO_STREAM("⚡ Turbo Stream (<15ms)", "Interactive persistent shell stream for instant response"),
-    STANDARD("Standard ADB (50-100ms)", "Standard individual command socket execution")
+    TURBO_STREAM("⚡ Turbo ADB (<20ms)", "Instant Native C++ Binder input injection"),
+    STANDARD("Standard ADB (50-100ms)", "Standard socket execution with fallback")
 }
 
 enum class ThemeAccent(val label: String, val primaryHex: Long) {
@@ -39,6 +40,12 @@ enum class ThemeAccent(val label: String, val primaryHex: Long) {
     AMBER("Fire Amber", 0xFFFF9100),
     PURPLE("Neon Violet", 0xFFA855F7),
     CRIMSON("Ruby Red", 0xFFEF4444)
+}
+
+enum class AppCategoryFilter(val label: String) {
+    USER("User Apps"),
+    SYSTEM("System Apps"),
+    ALL("All Apps")
 }
 
 data class RemoteSettings(
@@ -71,17 +78,32 @@ data class InstalledApp(
     val packageName: String,
     val appName: String,
     val versionName: String = "1.0",
+    val versionCode: String = "",
     val sizeString: String = "25 MB",
+    val apkPath: String = "",
     val isSystemApp: Boolean = false,
     val isEnabled: Boolean = true
 )
+
+enum class TvFileType {
+    DIRECTORY,
+    APK,
+    VIDEO,
+    AUDIO,
+    IMAGE,
+    DOCUMENT,
+    ARCHIVE,
+    OTHER
+}
 
 data class TvFileItem(
     val name: String,
     val path: String,
     val isDirectory: Boolean,
     val size: String = "",
-    val lastModified: String = ""
+    val lastModified: String = "",
+    val permissions: String = "",
+    val fileType: TvFileType = TvFileType.OTHER
 )
 
 data class TvToolAction(
@@ -91,6 +113,16 @@ data class TvToolAction(
     val icon: String,
     val command: String = "",
     val colorHex: Long = 0xFF00E5FF
+)
+
+data class FileTransferState(
+    val isOpen: Boolean = false,
+    val title: String = "",
+    val fileName: String = "",
+    val detailMessage: String = "",
+    val isFinished: Boolean = false,
+    val isSuccess: Boolean = true,
+    val progress: Float = 0f
 )
 
 object RemoteKeycodes {
@@ -217,15 +249,15 @@ object KeycodeMapper {
 }
 
 val ATV_GRID_TOOLS = listOf(
-    TvToolAction("install_apk", "Install APK", "Sideload APK package to TV", "install", colorHex = 0xFF00E5FF),
-    TvToolAction("upload_file", "Upload to Downloads", "Send files directly to /sdcard/Download", "upload", colorHex = 0xFF38BDF8),
-    TvToolAction("file_manager", "File Manager", "Explore TV internal file system", "folder", colorHex = 0xFFFBBF24),
-    TvToolAction("channels", "Channels", "Live TV channel switcher", "live_tv", colorHex = 0xFFA78BFA),
-    TvToolAction("screen_mirror", "Screen Mirror", "Wireless screen cast status & guide", "cast", colorHex = 0xFF34D399),
+    TvToolAction("install_apk", "Install APK", "Pick APK from phone & sideload to TV", "install", colorHex = 0xFF00E5FF),
+    TvToolAction("upload_file", "Upload to Downloads", "Send phone files to /sdcard/Download", "upload", colorHex = 0xFF38BDF8),
+    TvToolAction("file_manager", "File Manager", "Explore TV internal storage", "folder", colorHex = 0xFFFBBF24),
+    TvToolAction("channels", "Channels", "Live TV channel selector", "live_tv", colorHex = 0xFFA78BFA),
+    TvToolAction("screen_mirror", "Screen Cast", "Wireless casting settings", "cast", colorHex = 0xFF34D399),
     TvToolAction("gamepad", "Gamepad", "Virtual controller for TV games", "gamepad", colorHex = 0xFFEC4899),
-    TvToolAction("screenshot", "Screenshot", "Instant TV display grab & save", "screenshot", colorHex = 0xFF06B6D4),
-    TvToolAction("screen_record", "Screen Record", "Capture screen recording to /sdcard", "videocam", colorHex = 0xFFF97316),
-    TvToolAction("clear_cache", "Clear Cache", "Trim memory & optimize performance", "delete", colorHex = 0xFFEF4444),
-    TvToolAction("screensaver", "Screensaver", "Trigger ambient mode / daydream", "auto_awesome", colorHex = 0xFFA855F7),
-    TvToolAction("power_menu", "Power Menu", "Sleep, Reboot, Soft Reboot, Recovery", "power_settings_new", colorHex = 0xFFF43F5E)
+    TvToolAction("screenshot", "Screenshot", "Instant TV display grab & view", "screenshot", colorHex = 0xFF06B6D4),
+    TvToolAction("screen_record", "Screen Record", "Capture screen recording (10s)", "videocam", colorHex = 0xFFF97316),
+    TvToolAction("clear_cache", "Boost Cache", "Trim RAM & optimize speed", "delete", colorHex = 0xFFEF4444),
+    TvToolAction("screensaver", "Screensaver", "Trigger Ambient Mode / Daydream", "auto_awesome", colorHex = 0xFFA855F7),
+    TvToolAction("power_menu", "Power Menu", "Sleep, Reboot, Soft Reboot, Power", "power_settings_new", colorHex = 0xFFF43F5E)
 )

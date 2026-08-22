@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -32,6 +31,8 @@ import com.tysonmakes.tvremoteapp.ui.theme.*
 @Composable
 fun TvToolsView(
     onToolClick: (TvToolAction) -> Unit,
+    onInstallApkClick: () -> Unit,
+    onUploadFileClick: () -> Unit,
     isExecuting: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -40,21 +41,30 @@ fun TvToolsView(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 8.dp),
+                .padding(horizontal = 4.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = "⚡ Advanced TV Tools & Controls",
-                color = TextPrimary,
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Bolt,
+                    contentDescription = null,
+                    tint = AccentCyan,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Advanced TV Tools & Controls",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp
+                )
+            }
 
             if (isExecuting) {
                 CircularProgressIndicator(
@@ -69,14 +79,20 @@ fun TvToolsView(
             columns = GridCells.Fixed(2),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
         ) {
             items(ATV_GRID_TOOLS, key = { it.id }) { tool ->
                 TvGridToolCard(
                     tool = tool,
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        onToolClick(tool)
+                        when (tool.id) {
+                            "install_apk" -> onInstallApkClick()
+                            "upload_file" -> onUploadFileClick()
+                            else -> onToolClick(tool)
+                        }
                     }
                 )
             }
@@ -108,7 +124,7 @@ private fun TvGridToolCard(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(84.dp)
+            .height(86.dp)
             .shadow(4.dp, RoundedCornerShape(14.dp), spotColor = toolColor.copy(alpha = 0.2f))
             .clickable(onClick = onClick)
             .testTag("grid_tool_${tool.id}"),
@@ -124,7 +140,7 @@ private fun TvGridToolCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(40.dp)
+                    .size(42.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(toolColor.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
@@ -133,19 +149,20 @@ private fun TvGridToolCard(
                     imageVector = iconVector,
                     contentDescription = tool.title,
                     tint = toolColor,
-                    modifier = Modifier.size(22.dp)
+                    modifier = Modifier.size(24.dp)
                 )
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(10.dp))
 
             Column(
-                verticalArrangement = Arrangement.Center
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.weight(1f)
             ) {
                 Text(
                     text = tool.title,
                     color = TextPrimary,
-                    fontSize = 14.sp,
+                    fontSize = 13.5.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1
                 )
@@ -153,8 +170,9 @@ private fun TvGridToolCard(
                 Text(
                     text = tool.description,
                     color = TextMuted,
-                    fontSize = 10.sp,
-                    maxLines = 1
+                    fontSize = 10.5.sp,
+                    maxLines = 2,
+                    lineHeight = 13.sp
                 )
             }
         }

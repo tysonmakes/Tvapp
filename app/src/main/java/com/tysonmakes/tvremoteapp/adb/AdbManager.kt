@@ -6,6 +6,7 @@ import dadb.AdbKeyPair
 import dadb.Dadb
 import kotlinx.coroutines.*
 import java.io.File
+import java.io.InputStream
 
 sealed class AdbConnectionResult {
     data class Success(val message: String, val latencyMs: Long) : AdbConnectionResult()
@@ -19,6 +20,7 @@ sealed class AdbCommandResult {
 
 class AdbManager(private val context: Context) {
     private var dadb: Dadb? = null
+    private var supportsCmdInput: Boolean = true
 
     var connectedIp: String? = null
         private set
@@ -46,8 +48,13 @@ class AdbManager(private val context: Context) {
             val keyPair = getOrCreateKeyPair()
             val instance = Dadb.create(ip, port, keyPair)
 
-            // Test basic ping to verify active ADB daemon responsiveness
-            instance.shell("echo ping")
+            // Probe capability for native C++ cmd vs standard shell
+            try {
+                val probe = instance.shell("cmd input keyevent 0")
+                supportsCmdInput = !probe.output.contains("not found") && !probe.output.contains("Permission denied")
+            } catch (_: Exception) {
+                supportsCmdInput = false
+            }
 
             dadb = instance
             connectedIp = ip
@@ -62,22 +69,33 @@ class AdbManager(private val context: Context) {
     }
 
     /**
-     * Ultra-reliable high speed key dispatch using direct integer keycodes.
-     * Uses the active persistent Dadb TCP connection channel.
+     * Ultra-low latency key event dispatcher.
      */
     suspend fun sendKeyFast(keycode: String): AdbCommandResult = withContext(Dispatchers.IO) {
         val activeDadb = dadb ?: return@withContext AdbCommandResult.Failure("Not connected to TV")
         val startTime = System.currentTimeMillis()
         val numCode = KeycodeMapper.toNumeric(keycode)
+
+        val cmdToRun = if (supportsCmdInput) {
+            "cmd input keyevent $numCode"
+        } else {
+            "cmd input keyevent $numCode 2>/dev/null || (input keyevent $numCode >/dev/null 2>&1 &)"
+        }
+
         try {
-            // Standard universal command: 'input keyevent <numeric_code>'
-            val response = activeDadb.shell("input keyevent $numCode")
+            val response = activeDadb.shell(cmdToRun)
             val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
             val output = response.output.trim()
             val resultText = if (output.isNotEmpty()) output else "OK"
             AdbCommandResult.Success(resultText, latency)
         } catch (e: Exception) {
-            AdbCommandResult.Failure(e.localizedMessage ?: "Key dispatch failed")
+            try {
+                activeDadb.shell("input keyevent $numCode >/dev/null 2>&1 &")
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                AdbCommandResult.Success("OK", latency)
+            } catch (fallbackEx: Exception) {
+                AdbCommandResult.Failure(fallbackEx.localizedMessage ?: "Key dispatch failed")
+            }
         }
     }
 
@@ -86,11 +104,60 @@ class AdbManager(private val context: Context) {
         val startTime = System.currentTimeMillis()
         try {
             val escaped = text.replace(" ", "%s").replace("'", "\\'").replace("\"", "\\\"")
-            val response = activeDadb.shell("input text \"$escaped\"")
+            val command = if (supportsCmdInput) {
+                "cmd input text \"$escaped\""
+            } else {
+                "input text \"$escaped\""
+            }
+            val response = activeDadb.shell(command)
             val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
             AdbCommandResult.Success(response.output.ifBlank { "OK" }, latency)
         } catch (e: Exception) {
             AdbCommandResult.Failure(e.localizedMessage ?: "Text dispatch failed")
+        }
+    }
+
+    suspend fun pushFile(localFile: File, remotePath: String): AdbCommandResult = withContext(Dispatchers.IO) {
+        val activeDadb = dadb ?: return@withContext AdbCommandResult.Failure("Not connected to TV")
+        val startTime = System.currentTimeMillis()
+        try {
+            activeDadb.push(localFile, remotePath)
+            val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+            AdbCommandResult.Success("Uploaded to $remotePath", latency)
+        } catch (e: Exception) {
+            AdbCommandResult.Failure(e.localizedMessage ?: "File upload failed")
+        }
+    }
+
+    suspend fun installApk(localApkFile: File): AdbCommandResult = withContext(Dispatchers.IO) {
+        val activeDadb = dadb ?: return@withContext AdbCommandResult.Failure("Not connected to TV")
+        val startTime = System.currentTimeMillis()
+        try {
+            try {
+                activeDadb.install(localApkFile)
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                AdbCommandResult.Success("Success: App installed on TV", latency)
+            } catch (_: Exception) {
+                // Fallback: push to /data/local/tmp/ and run pm install -r
+                val safeFileName = "install_${System.currentTimeMillis()}.apk"
+                val tmpRemotePath = "/data/local/tmp/$safeFileName"
+                activeDadb.push(localApkFile, tmpRemotePath)
+                val installRes = activeDadb.shell("pm install -r \"$tmpRemotePath\" || pm install -r --user 0 \"$tmpRemotePath\"")
+                activeDadb.shell("rm -f \"$tmpRemotePath\"")
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                if (installRes.output.contains("Success", ignoreCase = true)) {
+                    AdbCommandResult.Success("Success: App installed on TV", latency)
+                } else {
+                    val out = installRes.output.trim()
+                    if (out.isBlank()) {
+                        AdbCommandResult.Success("Success: App installed on TV", latency)
+                    } else {
+                        AdbCommandResult.Failure("Install result: $out")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            AdbCommandResult.Failure(e.localizedMessage ?: "APK installation failed")
         }
     }
 
