@@ -55,3 +55,8 @@ val TextSecondary = TextGraySecondary
 val TextMuted = TextMutedSubtle
 val DpadBorderColor = RemoteBorderColor
 val DpadCenterColor = DpadCenterBg
+
+val StatusConnected = EmeraldSage
+val StatusConnecting = FireAmber
+val StatusError = RubyRed
+val StatusDisconnected = TextMutedSubtle

@@ -12,10 +12,13 @@ data class TvDevice(
 
 enum class RemoteTab(val title: String) {
     CONTROLS("Remote"),
+    TOOLS("Tools"),
+    APPS("Apps"),
+    GAMEPAD("Gamepad"),
+    INFO("Info"),
     TRACKPAD("Touchpad"),
     NUMPAD("Numpad"),
-    TOOLS("TV Tools"),
-    TERMINAL("Console")
+    TERMINAL("Shell")
 }
 
 enum class HapticIntensity(val label: String) {
@@ -46,13 +49,48 @@ data class RemoteSettings(
     val themeAccent: ThemeAccent = ThemeAccent.CYAN
 )
 
+data class DeviceTelemetry(
+    val deviceName: String = "Family Room TV",
+    val androidVersion: String = "11",
+    val modelName: String = "Android TV",
+    val manufacturer: String = "Google",
+    val storageUsedGb: Float = 2.57f,
+    val storageTotalGb: Float = 4.29f,
+    val cpuUsagePercent: Int = 34,
+    val ramUsedMb: Float = 725f,
+    val ramTotalMb: Float = 912f,
+    val wifiMac: String = "EC:9C:32:C4:27:85",
+    val ethernetMac: String = "B4:60:77:00:BF:85",
+    val downloadSpeedKb: Int = 2,
+    val uploadSpeedKb: Int = 5,
+    val uptimeString: String = "2 days, 14 hours",
+    val isFetching: Boolean = false
+)
+
+data class InstalledApp(
+    val packageName: String,
+    val appName: String,
+    val versionName: String = "1.0",
+    val sizeString: String = "25 MB",
+    val isSystemApp: Boolean = false,
+    val isEnabled: Boolean = true
+)
+
+data class TvFileItem(
+    val name: String,
+    val path: String,
+    val isDirectory: Boolean,
+    val size: String = "",
+    val lastModified: String = ""
+)
+
 data class TvToolAction(
     val id: String,
     val title: String,
     val description: String,
     val icon: String,
-    val command: String,
-    val colorHex: Long
+    val command: String = "",
+    val colorHex: Long = 0xFF00E5FF
 )
 
 object RemoteKeycodes {
@@ -87,6 +125,17 @@ object RemoteKeycodes {
     const val NOTIFICATION = "KEYCODE_NOTIFICATION"
     const val APP_SWITCH = "KEYCODE_APP_SWITCH"
 
+    // Gamepad controller buttons
+    const val BUTTON_A = "KEYCODE_BUTTON_A"
+    const val BUTTON_B = "KEYCODE_BUTTON_B"
+    const val BUTTON_X = "KEYCODE_BUTTON_X"
+    const val BUTTON_Y = "KEYCODE_BUTTON_Y"
+    const val BUTTON_L1 = "KEYCODE_BUTTON_L1"
+    const val BUTTON_R1 = "KEYCODE_BUTTON_R1"
+    const val BUTTON_START = "KEYCODE_BUTTON_START"
+    const val BUTTON_SELECT = "KEYCODE_BUTTON_SELECT"
+
+    // Numpad & Colors
     const val NUM_0 = "KEYCODE_0"
     const val NUM_1 = "KEYCODE_1"
     const val NUM_2 = "KEYCODE_2"
@@ -104,69 +153,79 @@ object RemoteKeycodes {
     const val PROG_BLUE = "KEYCODE_PROG_BLUE"
 }
 
-val TV_TOOL_ACTIONS = listOf(
-    TvToolAction(
-        id = "clear_cache",
-        title = "Boost & Clear Cache",
-        description = "Trims background memory and cleans cache",
-        icon = "cleaning_services",
-        command = "sync && echo 3 > /proc/sys/vm/drop_caches || am kill-all",
-        colorHex = 0xFF00E5FF
-    ),
-    TvToolAction(
-        id = "sleep_tv",
-        title = "Sleep Display",
-        description = "Puts TV display into instant standby",
-        icon = "bedtime",
-        command = "input keyevent KEYCODE_SLEEP",
-        colorHex = 0xFF818CF8
-    ),
-    TvToolAction(
-        id = "wake_tv",
-        title = "Wake Up TV",
-        description = "Wakes up screen and powers on HDMI-CEC",
-        icon = "wb_sunny",
-        command = "input keyevent KEYCODE_WAKEUP",
-        colorHex = 0xFFFBBF24
-    ),
-    TvToolAction(
-        id = "open_settings",
-        title = "Device Settings",
-        description = "Opens Android TV settings menu directly",
-        icon = "settings",
-        command = "am start -a android.settings.SETTINGS",
-        colorHex = 0xFF34D399
-    ),
-    TvToolAction(
-        id = "developer_options",
-        title = "Developer Options",
-        description = "Opens TV developer debug preferences",
-        icon = "code",
-        command = "am start -a com.android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
-        colorHex = 0xFFA78BFA
-    ),
-    TvToolAction(
-        id = "soft_reboot",
-        title = "Fast Soft Reboot",
-        description = "Restarts TV system UI without full boot cycle",
-        icon = "restart_alt",
-        command = "setprop ctl.restart zygote || am restart",
-        colorHex = 0xFFF97316
-    ),
-    TvToolAction(
-        id = "full_reboot",
-        title = "Full TV Reboot",
-        description = "Complete system restart of Android TV device",
-        icon = "power_settings_new",
-        command = "reboot",
-        colorHex = 0xFFEF4444
-    ),
-    TvToolAction(
-        id = "take_screenshot",
-        title = "Capture Screenshot",
-        description = "Takes screenshot and saves to /sdcard/tv_shot.png",
-        icon = "camera_alt",
-        command = "screencap -p /sdcard/tv_shot.png",
-        colorHex = 0xFF06B6D4
-    )
+object KeycodeMapper {
+    fun toNumeric(keycode: String): Int {
+        return when (keycode) {
+            RemoteKeycodes.DPAD_UP -> 19
+            RemoteKeycodes.DPAD_DOWN -> 20
+            RemoteKeycodes.DPAD_LEFT -> 21
+            RemoteKeycodes.DPAD_RIGHT -> 22
+            RemoteKeycodes.DPAD_CENTER -> 23
+            RemoteKeycodes.BACK -> 4
+            RemoteKeycodes.HOME -> 3
+            RemoteKeycodes.MENU -> 82
+            RemoteKeycodes.POWER -> 26
+            RemoteKeycodes.SLEEP -> 223
+            RemoteKeycodes.WAKEUP -> 224
+            RemoteKeycodes.VOLUME_UP -> 24
+            RemoteKeycodes.VOLUME_DOWN -> 25
+            RemoteKeycodes.VOLUME_MUTE -> 164
+            RemoteKeycodes.MEDIA_PLAY_PAUSE -> 85
+            RemoteKeycodes.MEDIA_PLAY -> 126
+            RemoteKeycodes.MEDIA_PAUSE -> 127
+            RemoteKeycodes.MEDIA_STOP -> 86
+            RemoteKeycodes.MEDIA_NEXT -> 87
+            RemoteKeycodes.MEDIA_PREVIOUS -> 88
+            RemoteKeycodes.MEDIA_FAST_FORWARD -> 90
+            RemoteKeycodes.MEDIA_REWIND -> 89
+            RemoteKeycodes.CHANNEL_UP -> 166
+            RemoteKeycodes.CHANNEL_DOWN -> 167
+            RemoteKeycodes.TV_INPUT -> 178
+            RemoteKeycodes.SETTINGS -> 176
+            RemoteKeycodes.SEARCH -> 84
+            RemoteKeycodes.VOICE_ASSIST -> 231
+            RemoteKeycodes.NOTIFICATION -> 83
+            RemoteKeycodes.APP_SWITCH -> 187
+            RemoteKeycodes.BUTTON_A -> 96
+            RemoteKeycodes.BUTTON_B -> 97
+            RemoteKeycodes.BUTTON_X -> 99
+            RemoteKeycodes.BUTTON_Y -> 100
+            RemoteKeycodes.BUTTON_L1 -> 102
+            RemoteKeycodes.BUTTON_R1 -> 103
+            RemoteKeycodes.BUTTON_START -> 108
+            RemoteKeycodes.BUTTON_SELECT -> 109
+            RemoteKeycodes.NUM_0 -> 7
+            RemoteKeycodes.NUM_1 -> 8
+            RemoteKeycodes.NUM_2 -> 9
+            RemoteKeycodes.NUM_3 -> 10
+            RemoteKeycodes.NUM_4 -> 11
+            RemoteKeycodes.NUM_5 -> 12
+            RemoteKeycodes.NUM_6 -> 13
+            RemoteKeycodes.NUM_7 -> 14
+            RemoteKeycodes.NUM_8 -> 15
+            RemoteKeycodes.NUM_9 -> 16
+            RemoteKeycodes.PROG_RED -> 183
+            RemoteKeycodes.PROG_GREEN -> 184
+            RemoteKeycodes.PROG_YELLOW -> 185
+            RemoteKeycodes.PROG_BLUE -> 186
+            else -> {
+                if (keycode.all { it.isDigit() }) keycode.toIntOrNull() ?: 23
+                else 23
+            }
+        }
+    }
+}
+
+val ATV_GRID_TOOLS = listOf(
+    TvToolAction("install_apk", "Install APK", "Sideload APK package to TV", "install", colorHex = 0xFF00E5FF),
+    TvToolAction("upload_file", "Upload to Downloads", "Send files directly to /sdcard/Download", "upload", colorHex = 0xFF38BDF8),
+    TvToolAction("file_manager", "File Manager", "Explore TV internal file system", "folder", colorHex = 0xFFFBBF24),
+    TvToolAction("channels", "Channels", "Live TV channel switcher", "live_tv", colorHex = 0xFFA78BFA),
+    TvToolAction("screen_mirror", "Screen Mirror", "Wireless screen cast status & guide", "cast", colorHex = 0xFF34D399),
+    TvToolAction("gamepad", "Gamepad", "Virtual controller for TV games", "gamepad", colorHex = 0xFFEC4899),
+    TvToolAction("screenshot", "Screenshot", "Instant TV display grab & save", "screenshot", colorHex = 0xFF06B6D4),
+    TvToolAction("screen_record", "Screen Record", "Capture screen recording to /sdcard", "videocam", colorHex = 0xFFF97316),
+    TvToolAction("clear_cache", "Clear Cache", "Trim memory & optimize performance", "delete", colorHex = 0xFFEF4444),
+    TvToolAction("screensaver", "Screensaver", "Trigger ambient mode / daydream", "auto_awesome", colorHex = 0xFFA855F7),
+    TvToolAction("power_menu", "Power Menu", "Sleep, Reboot, Soft Reboot, Recovery", "power_settings_new", colorHex = 0xFFF43F5E)
 )

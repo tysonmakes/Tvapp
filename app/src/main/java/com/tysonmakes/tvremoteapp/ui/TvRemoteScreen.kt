@@ -4,7 +4,9 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -53,7 +55,7 @@ fun TvRemoteScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             // 1. Top Header Bar: Device Status, Settings, TV Power
@@ -63,12 +65,12 @@ fun TvRemoteScreen(
                 onOpenSettings = { viewModel.setSettingsOpen(true) },
                 onPowerClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.sendKey(RemoteKeycodes.POWER)
+                    viewModel.setPowerMenuOpen(true)
                 },
                 onDisconnect = { viewModel.disconnect() }
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // 2. Primary Navigation Shortcut Pill Bar (Back, Home, Menu, Voice, Input)
             PrimaryNavigationPillBar(
@@ -78,17 +80,17 @@ fun TvRemoteScreen(
                 }
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // 3. Tab Selector Bar
+            // 3. Horizontal Scrollable Tab Selector Bar
             RemoteTabSelectorBar(
                 selectedTab = uiState.currentTab,
                 onTabSelect = { viewModel.setTab(it) }
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
-            // 4. Center Dynamic Arena (Remote D-pad / Trackpad / Apps / Numpad / TV Tools / Console)
+            // 4. Center Dynamic Arena (Remote D-pad / Tools / Apps / Gamepad / Info / Trackpad / Numpad / Shell)
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -111,6 +113,33 @@ fun TvRemoteScreen(
                                 hapticLevel = uiState.settings.hapticIntensity
                             )
                         }
+                        RemoteTab.TOOLS -> {
+                            TvToolsView(
+                                onToolClick = { viewModel.handleGridToolClick(it) },
+                                isExecuting = uiState.isExecutingTool
+                            )
+                        }
+                        RemoteTab.APPS -> {
+                            AppManagerView(
+                                apps = uiState.installedApps,
+                                isLoading = uiState.isAppsLoading,
+                                onRefresh = { viewModel.fetchInstalledApps() },
+                                onForceStop = { viewModel.forceStopApp(it) },
+                                onClearData = { viewModel.clearAppData(it) },
+                                onUninstall = { viewModel.uninstallApp(it) }
+                            )
+                        }
+                        RemoteTab.GAMEPAD -> {
+                            GamepadControl(
+                                onKeySend = { viewModel.sendKey(it) }
+                            )
+                        }
+                        RemoteTab.INFO -> {
+                            DeviceInfoView(
+                                telemetry = uiState.telemetry,
+                                onRefresh = { viewModel.fetchDeviceTelemetry() }
+                            )
+                        }
                         RemoteTab.TRACKPAD -> {
                             TrackpadControl(
                                 onKeySend = { viewModel.sendKey(it) }
@@ -119,12 +148,6 @@ fun TvRemoteScreen(
                         RemoteTab.NUMPAD -> {
                             NumpadView(
                                 onKeySend = { viewModel.sendKey(it) }
-                            )
-                        }
-                        RemoteTab.TOOLS -> {
-                            TvToolsView(
-                                onExecuteTool = { viewModel.executeTvTool(it) },
-                                isExecuting = uiState.isExecutingTool
                             )
                         }
                         RemoteTab.TERMINAL -> {
@@ -138,7 +161,7 @@ fun TvRemoteScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
 
             // 5. Bottom Smart Keyboard / Text Transmitter Bar
             BottomKeyboardTransmitter(
@@ -182,6 +205,47 @@ fun TvRemoteScreen(
         onDismiss = { viewModel.setSettingsOpen(false) },
         onUpdateSettings = { viewModel.updateSettings(it) }
     )
+
+    // Dialog: Power Menu
+    if (uiState.isPowerMenuOpen) {
+        PowerMenuDialog(
+            onDismiss = { viewModel.setPowerMenuOpen(false) },
+            onSleep = { viewModel.sendKey(RemoteKeycodes.SLEEP) },
+            onWake = { viewModel.sendKey(RemoteKeycodes.WAKEUP) },
+            onSoftReboot = {
+                viewModel.executeTvTool(
+                    com.tysonmakes.tvremoteapp.model.TvToolAction("soft_reboot", "Soft Reboot", "", "", "setprop ctl.restart zygote || am restart")
+                )
+            },
+            onFullReboot = {
+                viewModel.executeTvTool(
+                    com.tysonmakes.tvremoteapp.model.TvToolAction("reboot", "Full Reboot", "", "", "reboot")
+                )
+            },
+            onPowerOff = { viewModel.sendKey(RemoteKeycodes.POWER) }
+        )
+    }
+
+    // Dialog: Screenshot Preview
+    if (uiState.isScreenshotDialogOpen) {
+        ScreenshotDialog(
+            screenshotPath = uiState.lastScreenshotPath,
+            onDismiss = { viewModel.setScreenshotDialogOpen(false) }
+        )
+    }
+
+    // Dialog: File Manager
+    if (uiState.isFileManagerOpen) {
+        FileManagerDialog(
+            currentPath = uiState.currentTvPath,
+            files = uiState.tvFiles,
+            isLoading = uiState.isFilesLoading,
+            onNavigate = { viewModel.fetchTvFiles(it) },
+            onDelete = { viewModel.deleteTvFile(it) },
+            onRefresh = { viewModel.fetchTvFiles(uiState.currentTvPath) },
+            onDismiss = { viewModel.closeFileManager() }
+        )
+    }
 }
 
 @Composable
@@ -200,79 +264,104 @@ private fun TopDeviceHeader(
             .clip(RoundedCornerShape(16.dp))
             .background(DarkSurface)
             .border(1.dp, DpadBorderColor, RoundedCornerShape(16.dp))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // Left: Connection Status Pill & TV Label
+        // Device Info & Status Pill
         Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clickable(onClick = onOpenDiscovery)
-                .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(4.dp)
+                .testTag("device_header_pill")
         ) {
+            // Live Status Indicator LED
             Box(
                 modifier = Modifier
                     .size(10.dp)
                     .clip(CircleShape)
-                    .background(if (isConnected) AccentGreen else AccentRed)
+                    .background(
+                        when (uiState.connectionStatus) {
+                            is ConnectionStatus.Connected -> StatusConnected
+                            is ConnectionStatus.Connecting -> StatusConnecting
+                            is ConnectionStatus.Error -> StatusError
+                            ConnectionStatus.Disconnected -> StatusDisconnected
+                        }
+                    )
             )
-            Spacer(modifier = Modifier.width(8.dp))
+
+            Spacer(modifier = Modifier.width(10.dp))
+
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = if (isConnected) (uiState.connectedDevice?.name ?: "Android TV") else "Disconnected",
+                        text = uiState.connectedDevice?.name ?: "Android TV",
                         color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = Icons.Default.ArrowDropDown,
-                        contentDescription = "Select TV",
-                        tint = TextSecondary,
-                        modifier = Modifier.size(16.dp)
+                        contentDescription = "Switch Device",
+                        tint = TextMuted,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
+
                 Text(
-                    text = if (isConnected) "${uiState.connectedDevice?.ip} • ${uiState.latencyMs}ms" else "Tap to connect TV",
-                    color = if (isConnected) AccentCyan else TextMuted,
-                    fontSize = 10.5.sp,
+                    text = when (uiState.connectionStatus) {
+                        is ConnectionStatus.Connected -> "${uiState.connectedDevice?.ip} • ${uiState.latencyMs}ms"
+                        is ConnectionStatus.Connecting -> "Connecting to ${uiState.connectionStatus.ip}..."
+                        is ConnectionStatus.Error -> "Connection error (Tap to retry)"
+                        ConnectionStatus.Disconnected -> "Disconnected (Tap to scan)"
+                    },
+                    color = when (uiState.connectionStatus) {
+                        is ConnectionStatus.Connected -> AccentCyan
+                        is ConnectionStatus.Error -> StatusError
+                        else -> TextMuted
+                    },
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
         }
 
-        // Right Actions: Settings & Standby Power
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // Action Icons (Tune & Power)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             IconButton(
                 onClick = onOpenSettings,
                 modifier = Modifier
-                    .size(36.dp)
-                    .testTag("open_settings_button")
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .background(DarkSurfaceRaised)
+                    .testTag("settings_button")
             ) {
-                Icon(Icons.Default.Tune, contentDescription = "Settings", tint = TextSecondary, modifier = Modifier.size(20.dp))
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = "Settings",
+                    tint = TextPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
             }
 
-            Spacer(modifier = Modifier.width(4.dp))
-
-            // TV Power Button with Red LED Halo
-            Button(
+            IconButton(
                 onClick = onPowerClick,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AccentRed.copy(alpha = 0.2f),
-                    contentColor = AccentRed
-                ),
-                shape = CircleShape,
-                contentPadding = PaddingValues(0.dp),
                 modifier = Modifier
-                    .size(36.dp)
-                    .shadow(6.dp, CircleShape, spotColor = AccentRed.copy(alpha = 0.5f))
-                    .testTag("tv_power_button")
+                    .size(38.dp)
+                    .shadow(4.dp, CircleShape, spotColor = Color(0xFFEF4444))
+                    .clip(CircleShape)
+                    .background(Color(0xFFEF4444).copy(alpha = 0.15f))
+                    .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.5f), CircleShape)
+                    .testTag("power_button")
             ) {
                 Icon(
                     imageVector = Icons.Default.PowerSettingsNew,
-                    contentDescription = "Power",
+                    contentDescription = "Power Menu",
+                    tint = Color(0xFFEF4444),
                     modifier = Modifier.size(20.dp)
                 )
             }
@@ -288,17 +377,42 @@ private fun PrimaryNavigationPillBar(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(DarkSurfaceRaised)
+            .background(DarkSurface)
             .border(1.dp, DpadBorderColor, RoundedCornerShape(14.dp))
-            .padding(horizontal = 6.dp, vertical = 6.dp),
+            .padding(vertical = 4.dp, horizontal = 6.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        QuickNavPill(icon = Icons.AutoMirrored.Filled.ArrowBack, label = "Back", keycode = RemoteKeycodes.BACK, onKeySend = onKeySend, testTag = "nav_back")
-        QuickNavPill(icon = Icons.Default.Home, label = "Home", keycode = RemoteKeycodes.HOME, onKeySend = onKeySend, testTag = "nav_home")
-        QuickNavPill(icon = Icons.Default.Menu, label = "Menu", keycode = RemoteKeycodes.MENU, onKeySend = onKeySend, testTag = "nav_menu")
-        QuickNavPill(icon = Icons.Default.Mic, label = "Voice", keycode = RemoteKeycodes.SEARCH, onKeySend = onKeySend, testTag = "nav_voice")
-        QuickNavPill(icon = Icons.AutoMirrored.Filled.Input, label = "Input", keycode = RemoteKeycodes.TV_INPUT, onKeySend = onKeySend, testTag = "nav_input")
+        QuickNavPill(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            label = "Back",
+            tag = "back",
+            onClick = { onKeySend(RemoteKeycodes.BACK) }
+        )
+        QuickNavPill(
+            icon = Icons.Default.Home,
+            label = "Home",
+            tag = "home",
+            onClick = { onKeySend(RemoteKeycodes.HOME) }
+        )
+        QuickNavPill(
+            icon = Icons.Default.Menu,
+            label = "Menu",
+            tag = "menu",
+            onClick = { onKeySend(RemoteKeycodes.MENU) }
+        )
+        QuickNavPill(
+            icon = Icons.Default.Mic,
+            label = "Voice",
+            tag = "voice",
+            onClick = { onKeySend(RemoteKeycodes.VOICE_ASSIST) }
+        )
+        QuickNavPill(
+            icon = Icons.AutoMirrored.Filled.Input,
+            label = "Input",
+            tag = "input",
+            onClick = { onKeySend(RemoteKeycodes.TV_INPUT) }
+        )
     }
 }
 
@@ -306,23 +420,30 @@ private fun PrimaryNavigationPillBar(
 private fun QuickNavPill(
     icon: ImageVector,
     label: String,
-    keycode: String,
-    onKeySend: (String) -> Unit,
-    testTag: String
+    tag: String,
+    onClick: () -> Unit
 ) {
-    Box(
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
-            .clickable { onKeySend(keycode) }
+            .clickable(onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 6.dp)
-            .testTag(testTag),
-        contentAlignment = Alignment.Center
+            .testTag("quick_nav_$tag")
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(imageVector = icon, contentDescription = label, tint = AccentCyan, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(text = label, color = TextSecondary, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-        }
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = AccentCyan,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = label,
+            color = TextMuted,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
@@ -331,33 +452,34 @@ private fun RemoteTabSelectorBar(
     selectedTab: RemoteTab,
     onTabSelect: (RemoteTab) -> Unit
 ) {
+    val scrollState = rememberScrollState()
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(DarkSurface)
-            .border(1.dp, DpadBorderColor, RoundedCornerShape(14.dp))
+            .border(1.dp, DpadBorderColor, RoundedCornerShape(12.dp))
+            .horizontalScroll(scrollState)
             .padding(4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
         RemoteTab.entries.forEach { tab ->
             val isSelected = selectedTab == tab
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(
-                        if (isSelected) AccentCyan else Color.Transparent
-                    )
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isSelected) AccentCyan else Color.Transparent)
                     .clickable { onTabSelect(tab) }
-                    .padding(vertical = 6.dp)
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
                     .testTag("tab_${tab.name.lowercase()}"),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = tab.title,
-                    color = if (isSelected) DarkBackground else TextSecondary,
-                    fontSize = 11.sp,
+                    color = if (isSelected) Color.Black else TextMuted,
+                    fontSize = 12.sp,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                 )
             }
@@ -374,68 +496,88 @@ private fun BottomKeyboardTransmitter(
     statusMessage: String,
     isConnected: Boolean
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(14.dp))
-                .background(DarkSurfaceRaised)
-                .border(1.dp, DpadBorderColor, RoundedCornerShape(14.dp))
-                .padding(horizontal = 8.dp, vertical = 2.dp),
-            verticalAlignment = Alignment.CenterVertically
+    Column(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            color = DarkSurface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, DpadBorderColor)
         ) {
-            Icon(
-                imageVector = Icons.Default.Keyboard,
-                contentDescription = "Keyboard",
-                tint = AccentCyan,
-                modifier = Modifier.size(18.dp)
-            )
-
-            OutlinedTextField(
-                value = inputText,
-                onValueChange = onTextChanged,
-                placeholder = { Text("Type text to TV...", color = TextMuted, fontSize = 12.sp) },
-                singleLine = true,
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Color.Transparent,
-                    unfocusedBorderColor = Color.Transparent,
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
-                ),
+            Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .testTag("tv_text_input")
-            )
-
-            IconButton(
-                onClick = onPasteClipboard,
-                modifier = Modifier.size(32.dp)
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Default.ContentPaste,
-                    contentDescription = "Paste",
-                    tint = TextSecondary,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onSendText,
-                modifier = Modifier
-                    .size(34.dp)
-                    .testTag("send_text_button")
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = "Send",
+                    imageVector = Icons.Default.Keyboard,
+                    contentDescription = null,
                     tint = AccentCyan,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                 )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                TextField(
+                    value = inputText,
+                    onValueChange = onTextChanged,
+                    placeholder = {
+                        Text(
+                            text = "Type text to TV...",
+                            color = TextMuted,
+                            fontSize = 13.sp
+                        )
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("tv_input_textfield"),
+                    singleLine = true,
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    )
+                )
+
+                IconButton(
+                    onClick = onPasteClipboard,
+                    modifier = Modifier.size(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ContentPaste,
+                        contentDescription = "Paste Clipboard",
+                        tint = TextMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = onSendText,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(if (inputText.isNotBlank()) AccentCyan else DarkSurfaceRaised)
+                        .testTag("send_text_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Send",
+                        tint = if (inputText.isNotBlank()) Color.Black else TextMuted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
             }
         }
 
-        // Live Status Footer
         Spacer(modifier = Modifier.height(4.dp))
+
+        // Status Toast Micro-Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -445,17 +587,26 @@ private fun BottomKeyboardTransmitter(
         ) {
             Text(
                 text = statusMessage,
-                color = if (isConnected) AccentGreen else TextMuted,
-                fontSize = 10.5.sp,
-                fontWeight = FontWeight.Medium,
+                color = AccentCyan,
+                fontSize = 11.sp,
                 maxLines = 1
             )
-            Text(
-                text = "⚡ ADB Turbo Mode",
-                color = AccentCyan.copy(alpha = 0.8f),
-                fontSize = 10.5.sp,
-                fontWeight = FontWeight.Bold
-            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Bolt,
+                    contentDescription = null,
+                    tint = if (isConnected) Color(0xFFFBBF24) else TextMuted,
+                    modifier = Modifier.size(14.dp)
+                )
+                Spacer(modifier = Modifier.width(2.dp))
+                Text(
+                    text = if (isConnected) "ADB Turbo Stream" else "Offline",
+                    color = if (isConnected) Color(0xFFFBBF24) else TextMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
