@@ -3,7 +3,9 @@ package com.tysonmakes.tvremoteapp.ui.components
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -267,15 +269,14 @@ private fun DpadDirectionButton(
             .clip(CircleShape)
             .background(if (isPressed) AccentCyan.copy(alpha = 0.25f) else Color.Transparent)
             .pointerInput(keycode) {
-                detectTapGestures(
-                    onPress = {
-                        isPressed = true
-                        onStartRepeat(keycode)
-                        tryAwaitRelease()
-                        isPressed = false
-                        onStopRepeat()
-                    }
-                )
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    isPressed = true
+                    onStartRepeat(keycode)
+                    waitForUpOrCancellation()
+                    isPressed = false
+                    onStopRepeat()
+                }
             },
         contentAlignment = Alignment.Center
     ) {
@@ -314,14 +315,13 @@ private fun CenterOkButton(
                 shape = CircleShape
             )
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = {
-                        isPressed = true
-                        onPress()
-                        tryAwaitRelease()
-                        isPressed = false
-                    }
-                )
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    isPressed = true
+                    onPress()
+                    waitForUpOrCancellation()
+                    isPressed = false
+                }
             },
         contentAlignment = Alignment.Center
     ) {
@@ -416,15 +416,14 @@ private fun RockerSegment(
             .fillMaxWidth()
             .background(if (isPressed) AccentCyan.copy(alpha = 0.2f) else Color.Transparent)
             .pointerInput(keycode) {
-                detectTapGestures(
-                    onPress = {
-                        isPressed = true
-                        onStartRepeat(keycode)
-                        tryAwaitRelease()
-                        isPressed = false
-                        onStopRepeat()
-                    }
-                )
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    isPressed = true
+                    onStartRepeat(keycode)
+                    waitForUpOrCancellation()
+                    isPressed = false
+                    onStopRepeat()
+                }
             },
         contentAlignment = Alignment.Center
     ) {
@@ -462,15 +461,14 @@ private fun RockerCenterSegment(
             .height(34.dp)
             .background(if (isPressed) AccentCyan.copy(alpha = 0.25f) else DarkBackground.copy(alpha = 0.6f))
             .pointerInput(keycode) {
-                detectTapGestures(
-                    onPress = {
-                        isPressed = true
-                        onStartRepeat(keycode)
-                        tryAwaitRelease()
-                        isPressed = false
-                        onStopRepeat()
-                    }
-                )
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    isPressed = true
+                    onStartRepeat(keycode)
+                    waitForUpOrCancellation()
+                    isPressed = false
+                    onStopRepeat()
+                }
             },
         contentAlignment = Alignment.Center
     ) {

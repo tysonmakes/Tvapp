@@ -224,12 +224,7 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(lastPressedKey = keyShort) }
 
         viewModelScope.launch(Dispatchers.IO) {
-            val result = if (_uiState.value.settings.responseMode == ResponseMode.TURBO_STREAM) {
-                adbManager.sendKeyFast(keycode)
-            } else {
-                val num = KeycodeMapper.toNumeric(keycode)
-                adbManager.runShell("cmd input keyevent $num || input keyevent $num")
-            }
+            val result = adbManager.sendKeyFast(keycode)
 
             when (result) {
                 is AdbCommandResult.Success -> {
@@ -259,14 +254,9 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
         val repeatSpeed = _uiState.value.settings.repeatSpeedMs
 
         repeatJob = viewModelScope.launch(Dispatchers.IO) {
-            delay(220) // Initial hold threshold
+            delay(240) // Initial hold threshold
             while (isActive) {
-                if (_uiState.value.settings.responseMode == ResponseMode.TURBO_STREAM) {
-                    adbManager.sendKeyFast(keycode)
-                } else {
-                    val num = KeycodeMapper.toNumeric(keycode)
-                    adbManager.runShell("cmd input keyevent $num || input keyevent $num")
-                }
+                adbManager.sendKeyFast(keycode)
                 delay(repeatSpeed)
             }
         }
