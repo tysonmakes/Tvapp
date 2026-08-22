@@ -278,30 +278,6 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun launchApp(packageName: String) {
-        viewModelScope.launch {
-            _uiState.update { it.copy(statusMessage = "Launching $packageName...") }
-            appendLog("Launching app $packageName...")
-            when (val result = adbManager.launchApp(packageName)) {
-                is AdbCommandResult.Success -> {
-                    _uiState.update {
-                        it.copy(
-                            statusMessage = "Launched $packageName (${result.latencyMs}ms)",
-                            latencyMs = result.latencyMs
-                        )
-                    }
-                    appendLog("Launched $packageName (${result.latencyMs}ms)")
-                }
-                is AdbCommandResult.Failure -> {
-                    _uiState.update {
-                        it.copy(statusMessage = "Error launching: ${result.error}")
-                    }
-                    appendLog("Error launching app: ${result.error}")
-                }
-            }
-        }
-    }
-
     fun executeTvTool(tool: TvToolAction) {
         viewModelScope.launch {
             _uiState.update { it.copy(isExecutingTool = true, statusMessage = "Running ${tool.title}...") }

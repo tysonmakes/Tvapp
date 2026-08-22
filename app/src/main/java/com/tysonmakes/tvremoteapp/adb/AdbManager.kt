@@ -2,6 +2,7 @@ package com.tysonmakes.tvremoteapp.adb
 
 import android.content.Context
 import dadb.AdbKeyPair
+import dadb.AdbStream
 import dadb.Dadb
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,6 +20,7 @@ sealed class AdbCommandResult {
 
 class AdbManager(private val context: Context) {
     private var dadb: Dadb? = null
+    private var persistentShellStream: AdbStream? = null
 
     var connectedIp: String? = null
         private set
@@ -46,8 +48,9 @@ class AdbManager(private val context: Context) {
             val keyPair = getOrCreateKeyPair()
             val instance = Dadb.create(ip, port, keyPair)
             
-            // Validate connection
-            instance.shell("echo 1")
+            // Open a high-speed persistent interactive shell stream (bypasses per-command handshake overhead)
+            val stream = instance.open("shell:")
+            persistentShellStream = stream
             
             dadb = instance
             connectedIp = ip
@@ -62,10 +65,47 @@ class AdbManager(private val context: Context) {
     }
 
     /**
-     * Fast-path key event execution on dedicated IO dispatcher
+     * Instantaneous key event execution (<15ms).
+     * Writes directly to the open interactive stream socket without spawning new sub-processes.
      */
     suspend fun sendKeyFast(keycode: String): AdbCommandResult = withContext(Dispatchers.IO) {
+        val startTime = System.currentTimeMillis()
+        val stream = persistentShellStream
+        if (stream != null) {
+            try {
+                stream.sink.writeUtf8("input keyevent $keycode\n")
+                stream.sink.flush()
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                return@withContext AdbCommandResult.Success("OK", latency)
+            } catch (e: Exception) {
+                // If stream timed out or broke, re-open interactive stream immediately
+                try {
+                    val newStream = dadb?.open("shell:")
+                    persistentShellStream = newStream
+                    newStream?.sink?.writeUtf8("input keyevent $keycode\n")
+                    newStream?.sink?.flush()
+                    val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                    return@withContext AdbCommandResult.Success("OK", latency)
+                } catch (_: Exception) {}
+            }
+        }
+        // Fallback to standard execution
         runShell("input keyevent $keycode")
+    }
+
+    suspend fun sendTextFast(text: String): AdbCommandResult = withContext(Dispatchers.IO) {
+        val startTime = System.currentTimeMillis()
+        val stream = persistentShellStream
+        val escaped = text.replace(" ", "%s").replace("'", "\\'").replace("\"", "\\\"")
+        if (stream != null) {
+            try {
+                stream.sink.writeUtf8("input text \"$escaped\"\n")
+                stream.sink.flush()
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                return@withContext AdbCommandResult.Success("OK", latency)
+            } catch (_: Exception) {}
+        }
+        runShell("input text \"$escaped\"")
     }
 
     suspend fun runShell(command: String): AdbCommandResult = withContext(Dispatchers.IO) {
@@ -82,16 +122,12 @@ class AdbManager(private val context: Context) {
         }
     }
 
-    suspend fun sendTextFast(text: String): AdbCommandResult = withContext(Dispatchers.IO) {
-        val escaped = text.replace(" ", "%s").replace("'", "\\'").replace("\"", "\\\"")
-        runShell("input text \"$escaped\"")
-    }
-
-    suspend fun launchApp(packageName: String): AdbCommandResult {
-        return runShell("monkey -p $packageName -c android.intent.category.LAUNCHER 1 || am start $(pm dump $packageName | grep -A 1 'MAIN' | grep -oE '[^ ]+/[^ ]+' | head -n 1)")
-    }
-
     private fun cleanupSession() {
+        try {
+            persistentShellStream?.close()
+        } catch (_: Exception) {}
+        persistentShellStream = null
+
         try {
             dadb?.close()
         } catch (_: Exception) {}

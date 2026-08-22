@@ -13,7 +13,6 @@ data class TvDevice(
 enum class RemoteTab(val title: String) {
     CONTROLS("Remote"),
     TRACKPAD("Touchpad"),
-    APPS("Apps"),
     NUMPAD("Numpad"),
     TOOLS("TV Tools"),
     TERMINAL("Console")
@@ -42,17 +41,9 @@ enum class ThemeAccent(val label: String, val primaryHex: Long) {
 data class RemoteSettings(
     val hapticIntensity: HapticIntensity = HapticIntensity.MEDIUM,
     val responseMode: ResponseMode = ResponseMode.TURBO_STREAM,
-    val repeatSpeedMs: Long = 90L,
+    val repeatSpeedMs: Long = 85L,
     val autoConnectLastDevice: Boolean = true,
     val themeAccent: ThemeAccent = ThemeAccent.CYAN
-)
-
-data class AppShortcut(
-    val id: String,
-    val name: String,
-    val packageName: String,
-    val category: String,
-    val badgeColorHex: Long
 )
 
 data class TvToolAction(
@@ -112,23 +103,6 @@ object RemoteKeycodes {
     const val PROG_YELLOW = "KEYCODE_PROG_YELLOW"
     const val PROG_BLUE = "KEYCODE_PROG_BLUE"
 }
-
-val DEFAULT_APP_SHORTCUTS = listOf(
-    AppShortcut("youtube", "YouTube", "com.google.android.youtube.tv", "Streaming", 0xFFFF0000),
-    AppShortcut("netflix", "Netflix", "com.netflix.ninja", "Streaming", 0xFFE50914),
-    AppShortcut("prime", "Prime Video", "com.amazon.amazonvideo.livingroom", "Streaming", 0xFF00A8E1),
-    AppShortcut("disney", "Disney+ / Hotstar", "in.startv.hotstar", "Streaming", 0xFF113CCF),
-    AppShortcut("spotify", "Spotify", "com.spotify.tv.android", "Music", 0xFF1DB954),
-    AppShortcut("apple", "Apple TV", "com.apple.atve.androidtv.appletv", "Streaming", 0xFF2A2A2A),
-    AppShortcut("twitch", "Twitch", "tv.twitch.android.app", "Streaming", 0xFF9146FF),
-    AppShortcut("plex", "Plex", "com.plexapp.android", "Media", 0xFFE5A00D),
-    AppShortcut("kodi", "Kodi", "org.xbmc.kodi", "Media", 0xFF17B2E7),
-    AppShortcut("jiocinema", "JioCinema", "com.jio.media.ondemand.tv", "Streaming", 0xFFD81B60),
-    AppShortcut("sonyliv", "Sony LIV", "com.sonyliv", "Streaming", 0xFF00C853),
-    AppShortcut("vlc", "VLC for TV", "org.videolan.vlc", "Player", 0xFFFF9800),
-    AppShortcut("settings", "TV Settings", "com.android.tv.settings", "System", 0xFF607D8B),
-    AppShortcut("playstore", "Play Store", "com.android.vending", "System", 0xFF00C853)
-)
 
 val TV_TOOL_ACTIONS = listOf(
     TvToolAction(

@@ -116,11 +116,6 @@ fun TvRemoteScreen(
                                 onKeySend = { viewModel.sendKey(it) }
                             )
                         }
-                        RemoteTab.APPS -> {
-                            AppShortcutsView(
-                                onLaunchApp = { viewModel.launchApp(it) }
-                            )
-                        }
                         RemoteTab.NUMPAD -> {
                             NumpadView(
                                 onKeySend = { viewModel.sendKey(it) }
