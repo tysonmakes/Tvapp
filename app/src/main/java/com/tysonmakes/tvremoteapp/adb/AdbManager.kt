@@ -5,8 +5,10 @@ import com.tysonmakes.tvremoteapp.model.KeycodeMapper
 import dadb.AdbKeyPair
 import dadb.Dadb
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
-import java.io.InputStream
+import java.io.IOException
 
 sealed class AdbConnectionResult {
     data class Success(val message: String, val latencyMs: Long) : AdbConnectionResult()
@@ -20,11 +22,15 @@ sealed class AdbCommandResult {
 
 class AdbManager(private val context: Context) {
     private var dadb: Dadb? = null
-    private var supportsCmdInput: Boolean = true
+    private val adbMutex = Mutex()
 
     var connectedIp: String? = null
         private set
     var connectedPort: Int = 5555
+        private set
+    var lastTargetIp: String? = null
+        private set
+    var lastTargetPort: Int = 5555
         private set
 
     val isConnected: Boolean
@@ -41,141 +47,229 @@ class AdbManager(private val context: Context) {
     }
 
     suspend fun connect(ip: String, port: Int = 5555): AdbConnectionResult = withContext(Dispatchers.IO) {
-        val startTime = System.currentTimeMillis()
-        try {
-            cleanupSession()
-
-            val keyPair = getOrCreateKeyPair()
-            val instance = Dadb.create(ip, port, keyPair)
-
-            // Probe capability for native C++ cmd vs standard shell
+        adbMutex.withLock {
+            val startTime = System.currentTimeMillis()
+            lastTargetIp = ip
+            lastTargetPort = port
             try {
-                val probe = instance.shell("cmd input keyevent 0")
-                supportsCmdInput = !probe.output.contains("not found") && !probe.output.contains("Permission denied")
-            } catch (_: Exception) {
-                supportsCmdInput = false
+                cleanupSessionInternal()
+
+                val keyPair = getOrCreateKeyPair()
+                val instance = Dadb.create(ip, port, keyPair)
+
+                dadb = instance
+                connectedIp = ip
+                connectedPort = port
+
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                AdbConnectionResult.Success("Connected to $ip:$port", latency)
+            } catch (e: Exception) {
+                cleanupSessionInternal()
+                AdbConnectionResult.Failure(e.localizedMessage ?: "Failed to connect to $ip:$port")
             }
-
-            dadb = instance
-            connectedIp = ip
-            connectedPort = port
-
-            val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-            AdbConnectionResult.Success("Connected to $ip:$port", latency)
-        } catch (e: Exception) {
-            cleanupSession()
-            AdbConnectionResult.Failure(e.localizedMessage ?: "Failed to connect to $ip:$port")
         }
     }
 
     /**
-     * Ultra-low latency key event dispatcher.
+     * Internal reconnect helper used to auto-heal dropped sockets.
+     */
+    private fun tryReconnectInternal(): Boolean {
+        val ip = lastTargetIp ?: connectedIp ?: return false
+        val port = lastTargetPort
+        return try {
+            cleanupSessionInternal()
+            val keyPair = getOrCreateKeyPair()
+            val instance = Dadb.create(ip, port, keyPair)
+            dadb = instance
+            connectedIp = ip
+            connectedPort = port
+            true
+        } catch (_: Exception) {
+            cleanupSessionInternal()
+            false
+        }
+    }
+
+    /**
+     * Ultra-low latency, rock-solid key event dispatcher with Mutex & Auto-healing.
      */
     suspend fun sendKeyFast(keycode: String): AdbCommandResult = withContext(Dispatchers.IO) {
-        val activeDadb = dadb ?: return@withContext AdbCommandResult.Failure("Not connected to TV")
-        val startTime = System.currentTimeMillis()
         val numCode = KeycodeMapper.toNumeric(keycode)
+        val command = "input keyevent $numCode"
 
-        val cmdToRun = if (supportsCmdInput) {
-            "cmd input keyevent $numCode"
-        } else {
-            "cmd input keyevent $numCode 2>/dev/null || (input keyevent $numCode >/dev/null 2>&1 &)"
-        }
+        adbMutex.withLock {
+            val startTime = System.currentTimeMillis()
 
-        try {
-            val response = activeDadb.shell(cmdToRun)
-            val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-            val output = response.output.trim()
-            val resultText = if (output.isNotEmpty()) output else "OK"
-            AdbCommandResult.Success(resultText, latency)
-        } catch (e: Exception) {
+            // 1. Ensure active Dadb instance (or auto-reconnect)
+            var activeDadb = dadb
+            if (activeDadb == null) {
+                if (tryReconnectInternal()) {
+                    activeDadb = dadb
+                } else {
+                    return@withContext AdbCommandResult.Failure("Not connected to TV")
+                }
+            }
+
+            // 2. Execute command
             try {
-                activeDadb.shell("input keyevent $numCode >/dev/null 2>&1 &")
+                val response = activeDadb!!.shell(command)
                 val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-                AdbCommandResult.Success("OK", latency)
-            } catch (fallbackEx: Exception) {
-                AdbCommandResult.Failure(fallbackEx.localizedMessage ?: "Key dispatch failed")
+                val out = response.output.trim()
+                AdbCommandResult.Success(if (out.isNotEmpty()) out else "OK", latency)
+            } catch (e: Exception) {
+                // Socket broken or TV closed connection -> Try 1 auto-reconnect attempt
+                if (tryReconnectInternal()) {
+                    try {
+                        val retryResponse = dadb!!.shell(command)
+                        val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                        val out = retryResponse.output.trim()
+                        AdbCommandResult.Success(if (out.isNotEmpty()) out else "OK", latency)
+                    } catch (retryEx: Exception) {
+                        AdbCommandResult.Failure(retryEx.localizedMessage ?: "Key dispatch failed after reconnect")
+                    }
+                } else {
+                    AdbCommandResult.Failure(e.localizedMessage ?: "Key dispatch failed")
+                }
             }
         }
     }
 
     suspend fun sendTextFast(text: String): AdbCommandResult = withContext(Dispatchers.IO) {
-        val activeDadb = dadb ?: return@withContext AdbCommandResult.Failure("Not connected to TV")
-        val startTime = System.currentTimeMillis()
-        try {
-            val escaped = text.replace(" ", "%s").replace("'", "\\'").replace("\"", "\\\"")
-            val command = if (supportsCmdInput) {
-                "cmd input text \"$escaped\""
-            } else {
-                "input text \"$escaped\""
+        val escaped = text.replace(" ", "%s").replace("'", "\\'").replace("\"", "\\\"")
+        val command = "input text \"$escaped\""
+
+        adbMutex.withLock {
+            val startTime = System.currentTimeMillis()
+            var activeDadb = dadb
+            if (activeDadb == null) {
+                if (tryReconnectInternal()) {
+                    activeDadb = dadb
+                } else {
+                    return@withContext AdbCommandResult.Failure("Not connected to TV")
+                }
             }
-            val response = activeDadb.shell(command)
-            val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-            AdbCommandResult.Success(response.output.ifBlank { "OK" }, latency)
-        } catch (e: Exception) {
-            AdbCommandResult.Failure(e.localizedMessage ?: "Text dispatch failed")
+
+            try {
+                val response = activeDadb!!.shell(command)
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                AdbCommandResult.Success(response.output.ifBlank { "OK" }, latency)
+            } catch (e: Exception) {
+                if (tryReconnectInternal()) {
+                    try {
+                        val retryResponse = dadb!!.shell(command)
+                        val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                        AdbCommandResult.Success(retryResponse.output.ifBlank { "OK" }, latency)
+                    } catch (retryEx: Exception) {
+                        AdbCommandResult.Failure(retryEx.localizedMessage ?: "Text dispatch failed")
+                    }
+                } else {
+                    AdbCommandResult.Failure(e.localizedMessage ?: "Text dispatch failed")
+                }
+            }
         }
     }
 
     suspend fun pushFile(localFile: File, remotePath: String): AdbCommandResult = withContext(Dispatchers.IO) {
-        val activeDadb = dadb ?: return@withContext AdbCommandResult.Failure("Not connected to TV")
-        val startTime = System.currentTimeMillis()
-        try {
-            activeDadb.push(localFile, remotePath)
-            val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-            AdbCommandResult.Success("Uploaded to $remotePath", latency)
-        } catch (e: Exception) {
-            AdbCommandResult.Failure(e.localizedMessage ?: "File upload failed")
+        adbMutex.withLock {
+            val startTime = System.currentTimeMillis()
+            var activeDadb = dadb
+            if (activeDadb == null) {
+                if (tryReconnectInternal()) {
+                    activeDadb = dadb
+                } else {
+                    return@withContext AdbCommandResult.Failure("Not connected to TV")
+                }
+            }
+
+            try {
+                activeDadb!!.push(localFile, remotePath)
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                AdbCommandResult.Success("Uploaded to $remotePath", latency)
+            } catch (e: Exception) {
+                AdbCommandResult.Failure(e.localizedMessage ?: "File upload failed")
+            }
         }
     }
 
     suspend fun installApk(localApkFile: File): AdbCommandResult = withContext(Dispatchers.IO) {
-        val activeDadb = dadb ?: return@withContext AdbCommandResult.Failure("Not connected to TV")
-        val startTime = System.currentTimeMillis()
-        try {
-            try {
-                activeDadb.install(localApkFile)
-                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-                AdbCommandResult.Success("Success: App installed on TV", latency)
-            } catch (_: Exception) {
-                // Fallback: push to /data/local/tmp/ and run pm install -r
-                val safeFileName = "install_${System.currentTimeMillis()}.apk"
-                val tmpRemotePath = "/data/local/tmp/$safeFileName"
-                activeDadb.push(localApkFile, tmpRemotePath)
-                val installRes = activeDadb.shell("pm install -r \"$tmpRemotePath\" || pm install -r --user 0 \"$tmpRemotePath\"")
-                activeDadb.shell("rm -f \"$tmpRemotePath\"")
-                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-                if (installRes.output.contains("Success", ignoreCase = true)) {
-                    AdbCommandResult.Success("Success: App installed on TV", latency)
+        adbMutex.withLock {
+            val startTime = System.currentTimeMillis()
+            var activeDadb = dadb
+            if (activeDadb == null) {
+                if (tryReconnectInternal()) {
+                    activeDadb = dadb
                 } else {
-                    val out = installRes.output.trim()
-                    if (out.isBlank()) {
-                        AdbCommandResult.Success("Success: App installed on TV", latency)
-                    } else {
-                        AdbCommandResult.Failure("Install result: $out")
-                    }
+                    return@withContext AdbCommandResult.Failure("Not connected to TV")
                 }
             }
-        } catch (e: Exception) {
-            AdbCommandResult.Failure(e.localizedMessage ?: "APK installation failed")
+
+            try {
+                try {
+                    activeDadb!!.install(localApkFile)
+                    val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                    AdbCommandResult.Success("Success: App installed on TV", latency)
+                } catch (_: Exception) {
+                    // Fallback: push to /data/local/tmp/ and run pm install -r
+                    val safeFileName = "install_${System.currentTimeMillis()}.apk"
+                    val tmpRemotePath = "/data/local/tmp/$safeFileName"
+                    activeDadb!!.push(localApkFile, tmpRemotePath)
+                    val installRes = activeDadb!!.shell("pm install -r -d -g \"$tmpRemotePath\" || pm install -r --user 0 \"$tmpRemotePath\"")
+                    activeDadb!!.shell("rm -f \"$tmpRemotePath\"")
+                    val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                    if (installRes.output.contains("Success", ignoreCase = true)) {
+                        AdbCommandResult.Success("Success: App installed on TV", latency)
+                    } else {
+                        val out = installRes.output.trim()
+                        if (out.isBlank()) {
+                            AdbCommandResult.Success("Success: App installed on TV", latency)
+                        } else {
+                            AdbCommandResult.Failure("Install result: $out")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                AdbCommandResult.Failure(e.localizedMessage ?: "APK installation failed")
+            }
         }
     }
 
     suspend fun runShell(command: String): AdbCommandResult = withContext(Dispatchers.IO) {
-        val activeDadb = dadb ?: return@withContext AdbCommandResult.Failure("Not connected to TV")
-        val startTime = System.currentTimeMillis()
-        try {
-            val response = activeDadb.shell(command)
-            val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
-            val output = response.output.trim()
-            val resultText = if (output.isNotEmpty()) output else "OK"
-            AdbCommandResult.Success(resultText, latency)
-        } catch (e: Exception) {
-            AdbCommandResult.Failure(e.localizedMessage ?: "Command execution failed")
+        adbMutex.withLock {
+            val startTime = System.currentTimeMillis()
+            var activeDadb = dadb
+            if (activeDadb == null) {
+                if (tryReconnectInternal()) {
+                    activeDadb = dadb
+                } else {
+                    return@withContext AdbCommandResult.Failure("Not connected to TV")
+                }
+            }
+
+            try {
+                val response = activeDadb!!.shell(command)
+                val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                val output = response.output.trim()
+                val resultText = if (output.isNotEmpty()) output else "OK"
+                AdbCommandResult.Success(resultText, latency)
+            } catch (e: Exception) {
+                if (tryReconnectInternal()) {
+                    try {
+                        val retryResponse = dadb!!.shell(command)
+                        val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                        val output = retryResponse.output.trim()
+                        val resultText = if (output.isNotEmpty()) output else "OK"
+                        AdbCommandResult.Success(resultText, latency)
+                    } catch (retryEx: Exception) {
+                        AdbCommandResult.Failure(retryEx.localizedMessage ?: "Command execution failed")
+                    }
+                } else {
+                    AdbCommandResult.Failure(e.localizedMessage ?: "Command execution failed")
+                }
+            }
         }
     }
 
-    private fun cleanupSession() {
+    private fun cleanupSessionInternal() {
         try {
             dadb?.close()
         } catch (_: Exception) {}
@@ -184,7 +278,9 @@ class AdbManager(private val context: Context) {
     }
 
     suspend fun disconnect(): AdbConnectionResult = withContext(Dispatchers.IO) {
-        cleanupSession()
-        AdbConnectionResult.Success("Disconnected", 0)
+        adbMutex.withLock {
+            cleanupSessionInternal()
+            AdbConnectionResult.Success("Disconnected", 0)
+        }
     }
 }

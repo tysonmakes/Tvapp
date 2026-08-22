@@ -235,12 +235,26 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
         _uiState.update { it.copy(lastPressedKey = keyShort) }
 
         viewModelScope.launch(Dispatchers.IO) {
+            // If not connected but we have saved device, try auto-connecting
+            if (!adbManager.isConnected) {
+                val lastDev = _uiState.value.connectedDevice ?: _uiState.value.savedDevices.firstOrNull()
+                if (lastDev != null) {
+                    adbManager.connect(lastDev.ip, lastDev.port)
+                }
+            }
+
             val result = adbManager.sendKeyFast(keycode)
 
             when (result) {
                 is AdbCommandResult.Success -> {
+                    val activeDevice = _uiState.value.connectedDevice 
+                        ?: _uiState.value.savedDevices.firstOrNull() 
+                        ?: TvDevice(ip = adbManager.connectedIp ?: "Android TV", port = adbManager.connectedPort, name = "Android TV")
+
                     _uiState.update {
                         it.copy(
+                            connectionStatus = ConnectionStatus.Connected(activeDevice, result.latencyMs),
+                            connectedDevice = activeDevice,
                             latencyMs = result.latencyMs,
                             statusMessage = "$keyShort (${result.latencyMs}ms)"
                         )
@@ -248,7 +262,7 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                 }
                 is AdbCommandResult.Failure -> {
                     _uiState.update {
-                        it.copy(statusMessage = "Key Error: ${result.error}")
+                        it.copy(statusMessage = "Key: ${result.error}")
                     }
                 }
             }
@@ -276,14 +290,27 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
 
     fun sendText(text: String) {
         if (text.isBlank()) return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _uiState.update { it.copy(statusMessage = "Sending text to TV...") }
             appendLog("Transmitting text: '$text'")
+
+            if (!adbManager.isConnected) {
+                val lastDev = _uiState.value.connectedDevice ?: _uiState.value.savedDevices.firstOrNull()
+                if (lastDev != null) {
+                    adbManager.connect(lastDev.ip, lastDev.port)
+                }
+            }
+
             val result = adbManager.sendTextFast(text)
             when (result) {
                 is AdbCommandResult.Success -> {
+                    val activeDevice = _uiState.value.connectedDevice 
+                        ?: _uiState.value.savedDevices.firstOrNull() 
+                        ?: TvDevice(ip = adbManager.connectedIp ?: "Android TV", port = adbManager.connectedPort, name = "Android TV")
+
                     _uiState.update {
                         it.copy(
+                            connectionStatus = ConnectionStatus.Connected(activeDevice, result.latencyMs),
                             statusMessage = "Sent text (${result.latencyMs}ms)",
                             latencyMs = result.latencyMs
                         )
