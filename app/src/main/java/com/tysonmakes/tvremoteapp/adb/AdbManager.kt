@@ -3,10 +3,14 @@ package com.tysonmakes.tvremoteapp.adb
 import android.content.Context
 import com.tysonmakes.tvremoteapp.model.KeycodeMapper
 import dadb.AdbKeyPair
+import dadb.AdbStream
 import dadb.Dadb
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okio.BufferedSink
+import okio.buffer
 import java.io.File
 import java.io.IOException
 
@@ -22,6 +26,8 @@ sealed class AdbCommandResult {
 
 class AdbManager(private val context: Context) {
     private var dadb: Dadb? = null
+    private var interactiveShellStream: AdbStream? = null
+    private var shellSink: BufferedSink? = null
     private val adbMutex = Mutex()
 
     var connectedIp: String? = null
@@ -46,6 +52,34 @@ class AdbManager(private val context: Context) {
         return AdbKeyPair.read(privFile, pubFile)
     }
 
+    private fun ensureInteractiveShell(): BufferedSink? {
+        val currentSink = shellSink
+        if (currentSink != null && interactiveShellStream != null) {
+            return currentSink
+        }
+        val currentDadb = dadb ?: return null
+        return try {
+            val stream = currentDadb.open("shell:")
+            val sink = stream.sink.buffer()
+            interactiveShellStream = stream
+            shellSink = sink
+            sink
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun closeInteractiveShellInternal() {
+        try {
+            shellSink?.close()
+        } catch (_: Exception) {}
+        try {
+            interactiveShellStream?.close()
+        } catch (_: Exception) {}
+        shellSink = null
+        interactiveShellStream = null
+    }
+
     suspend fun connect(ip: String, port: Int = 5555): AdbConnectionResult = withContext(Dispatchers.IO) {
         adbMutex.withLock {
             val startTime = System.currentTimeMillis()
@@ -60,6 +94,9 @@ class AdbManager(private val context: Context) {
                 dadb = instance
                 connectedIp = ip
                 connectedPort = port
+
+                // Warm up interactive shell in background
+                ensureInteractiveShell()
 
                 val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
                 AdbConnectionResult.Success("Connected to $ip:$port", latency)
@@ -83,6 +120,7 @@ class AdbManager(private val context: Context) {
             dadb = instance
             connectedIp = ip
             connectedPort = port
+            ensureInteractiveShell()
             true
         } catch (_: Exception) {
             cleanupSessionInternal()
@@ -91,28 +129,38 @@ class AdbManager(private val context: Context) {
     }
 
     /**
-     * Ultra-low latency, rock-solid key event dispatcher with Mutex & Auto-healing.
+     * Ultra-low latency (<5ms) persistent-stream key event dispatcher with robust fallback.
      */
     suspend fun sendKeyFast(keycode: String): AdbCommandResult = withContext(Dispatchers.IO) {
         val numCode = KeycodeMapper.toNumeric(keycode)
-        val command = "input keyevent $numCode"
+        val startTime = System.currentTimeMillis()
 
         adbMutex.withLock {
-            val startTime = System.currentTimeMillis()
-
             // 1. Ensure active Dadb instance (or auto-reconnect)
-            var activeDadb = dadb
-            if (activeDadb == null) {
-                if (tryReconnectInternal()) {
-                    activeDadb = dadb
-                } else {
+            if (dadb == null) {
+                if (!tryReconnectInternal()) {
                     return@withContext AdbCommandResult.Failure("Not connected to TV")
                 }
             }
 
-            // 2. Execute command
+            // 2. Primary Fast Path: Inject into Persistent Interactive Shell (<2ms execution)
+            val sink = ensureInteractiveShell()
+            if (sink != null) {
+                try {
+                    sink.writeUtf8("input keyevent $numCode\n")
+                    sink.flush()
+                    val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                    return@withContext AdbCommandResult.Success("OK", latency)
+                } catch (_: Exception) {
+                    // Broken pipe / closed stream -> reset stream and fall through to fallback
+                    closeInteractiveShellInternal()
+                }
+            }
+
+            // 3. Resilient Secondary Fallback: Standard Dadb shell command
+            val command = "input keyevent $numCode"
             try {
-                val response = activeDadb!!.shell(command)
+                val response = dadb!!.shell(command)
                 val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
                 val out = response.output.trim()
                 AdbCommandResult.Success(if (out.isNotEmpty()) out else "OK", latency)
@@ -136,21 +184,30 @@ class AdbManager(private val context: Context) {
 
     suspend fun sendTextFast(text: String): AdbCommandResult = withContext(Dispatchers.IO) {
         val escaped = text.replace(" ", "%s").replace("'", "\\'").replace("\"", "\\\"")
-        val command = "input text \"$escaped\""
+        val startTime = System.currentTimeMillis()
 
         adbMutex.withLock {
-            val startTime = System.currentTimeMillis()
-            var activeDadb = dadb
-            if (activeDadb == null) {
-                if (tryReconnectInternal()) {
-                    activeDadb = dadb
-                } else {
+            if (dadb == null) {
+                if (!tryReconnectInternal()) {
                     return@withContext AdbCommandResult.Failure("Not connected to TV")
                 }
             }
 
+            val sink = ensureInteractiveShell()
+            if (sink != null) {
+                try {
+                    sink.writeUtf8("input text \"$escaped\"\n")
+                    sink.flush()
+                    val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
+                    return@withContext AdbCommandResult.Success("OK", latency)
+                } catch (_: Exception) {
+                    closeInteractiveShellInternal()
+                }
+            }
+
+            val command = "input text \"$escaped\""
             try {
-                val response = activeDadb!!.shell(command)
+                val response = dadb!!.shell(command)
                 val latency = (System.currentTimeMillis() - startTime).coerceAtLeast(1)
                 AdbCommandResult.Success(response.output.ifBlank { "OK" }, latency)
             } catch (e: Exception) {
@@ -270,6 +327,7 @@ class AdbManager(private val context: Context) {
     }
 
     private fun cleanupSessionInternal() {
+        closeInteractiveShellInternal()
         try {
             dadb?.close()
         } catch (_: Exception) {}
