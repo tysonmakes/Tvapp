@@ -33,12 +33,12 @@ data class TvInputOption(
 )
 
 val DEFAULT_TV_INPUTS = listOf(
-    TvInputOption("hdmi_1", "HDMI 1", "External Port 1", Icons.Default.Tv, "cmd input keyevent 178"),
-    TvInputOption("hdmi_2", "HDMI 2", "External Port 2", Icons.Default.Tv, "cmd input keyevent 178"),
-    TvInputOption("hdmi_3", "HDMI 3 (ARC/eARC)", "Audio Return Port", Icons.Default.SpeakerGroup, "cmd input keyevent 178"),
-    TvInputOption("hdmi_4", "HDMI 4", "Gaming Console", Icons.Default.SportsEsports, "cmd input keyevent 178"),
-    TvInputOption("live_tv", "Live TV / Tuner", "Broadcast Channels", Icons.Default.LiveTv, "cmd input keyevent 170"),
-    TvInputOption("av_in", "Composite / AV", "RCA Analog In", Icons.Default.SettingsInputComponent, "cmd input keyevent 178")
+    TvInputOption("hdmi_1", "HDMI 1", "External Port 1", Icons.Default.Tv, "input keyevent 178"),
+    TvInputOption("hdmi_2", "HDMI 2", "External Port 2", Icons.Default.Tv, "input keyevent 178"),
+    TvInputOption("hdmi_3", "HDMI 3 (ARC/eARC)", "Audio Return Port", Icons.Default.SpeakerGroup, "input keyevent 178"),
+    TvInputOption("hdmi_4", "HDMI 4", "Gaming Console", Icons.Default.SportsEsports, "input keyevent 178"),
+    TvInputOption("live_tv", "Live TV / Tuner", "Broadcast Channels", Icons.Default.LiveTv, "input keyevent 170"),
+    TvInputOption("av_in", "Composite / AV", "RCA Analog In", Icons.Default.SettingsInputComponent, "input keyevent 178")
 )
 
 @Composable

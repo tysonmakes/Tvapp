@@ -276,9 +276,15 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
                 is AdbCommandResult.Failure -> {
+                    val isUnauthorized = result.error.contains("unauthorized", ignoreCase = true)
+
                     _uiState.update {
-                        it.copy(statusMessage = "Key: ${result.error}")
+                        it.copy(
+                            statusMessage = "Key: ${result.error}",
+                            connectionStatus = if (isUnauthorized) ConnectionStatus.Error(result.error) else it.connectionStatus
+                        )
                     }
+                    appendLog("Key dispatch note ($keyShort): ${result.error}")
                 }
             }
         }
@@ -1058,7 +1064,7 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
             }
             "screensaver" -> {
                 executeTvTool(
-                    TvToolAction("screensaver", "Screensaver", "Activating Ambient Mode", "", "cmd input keyevent 223 || am start -n com.android.systemui/.Somnambulator")
+                    TvToolAction("screensaver", "Screensaver", "Activating Ambient Mode", "", "input keyevent 223 || am start -n com.android.systemui/.Somnambulator")
                 )
             }
             "channels" -> {

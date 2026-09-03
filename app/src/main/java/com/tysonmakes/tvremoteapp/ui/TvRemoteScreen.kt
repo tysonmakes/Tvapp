@@ -284,6 +284,43 @@ fun TvRemoteScreen(
                     }
                 }
             }
+
+            // Real-time status feedback pill (shows command feedback or errors clearly)
+            if (uiState.statusMessage.isNotBlank()) {
+                val isError = uiState.statusMessage.contains("failed", ignoreCase = true) ||
+                        uiState.statusMessage.contains("error", ignoreCase = true) ||
+                        uiState.statusMessage.contains("unauthorized", ignoreCase = true) ||
+                        uiState.statusMessage.contains("timed out", ignoreCase = true)
+
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 10.dp, start = 16.dp, end = 16.dp),
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (isError) Color(0xFFEF4444).copy(alpha = 0.95f) else Color(0xFF1E2430).copy(alpha = 0.92f),
+                    shadowElevation = 6.dp,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, if (isError) Color(0xFFDC2626) else AtvDividerLine)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(if (isError) Color.White else AtvAccentBlue)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = uiState.statusMessage,
+                            color = Color.White,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
         }
     }
 
