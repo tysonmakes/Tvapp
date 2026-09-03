@@ -61,7 +61,7 @@ fun DpadControl(
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Main Controller Arena: Volume Rocker | D-PAD Compass | Channel Rocker
         Row(

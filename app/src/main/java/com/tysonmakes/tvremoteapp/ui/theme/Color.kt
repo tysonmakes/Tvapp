@@ -2,13 +2,27 @@ package com.tysonmakes.tvremoteapp.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Premium TV Remote Dark Surface Palettes
-val RemoteCanvasDark = Color(0xFF0C1014)
-val RemoteCardDark = Color(0xFF151C22)
-val RemoteCardHover = Color(0xFF1E2832)
-val RemoteRaisedSurface = Color(0xFF1B242C)
-val RemoteBorderColor = Color(0xFF2B3A48)
-val RemoteBorderActive = Color(0xFF3B5064)
+// Premium TV Remote Dark Surface Palettes (atvTools Theme)
+val AtvCanvasDark = Color(0xFF111215)
+val AtvSheetDark = Color(0xFF222429)
+val AtvButtonDark = Color(0xFF353D4B)
+val AtvButtonPressed = Color(0xFF454F62)
+val AtvDividerLine = Color(0xFF485265)
+val AtvCenterOkWhite = Color(0xFFFFFFFF)
+val AtvAccentBlue = Color(0xFF3D82F6)
+val AtvPowerRed = Color(0xFFE53935)
+val AtvSearchBg = Color(0xFF2E333D)
+val AtvMiniPlayerBg = Color(0xFF1E2127)
+val AtvTextPrimary = Color(0xFFFFFFFF)
+val AtvTextSecondary = Color(0xFF9BA3AF)
+val AtvTextMuted = Color(0xFF6B7280)
+
+val RemoteCanvasDark = AtvCanvasDark
+val RemoteCardDark = AtvSheetDark
+val RemoteCardHover = Color(0xFF2B303A)
+val RemoteRaisedSurface = AtvButtonDark
+val RemoteBorderColor = Color(0xFF2A2E37)
+val RemoteBorderActive = AtvAccentBlue
 
 // Glow & Dynamic Accents
 val NeonCyan = Color(0xFF00E5FF)

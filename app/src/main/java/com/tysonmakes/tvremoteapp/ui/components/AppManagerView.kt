@@ -17,12 +17,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import com.tysonmakes.tvremoteapp.model.AppCategoryFilter
 import com.tysonmakes.tvremoteapp.model.InstalledApp
 import com.tysonmakes.tvremoteapp.ui.theme.*
@@ -38,15 +40,14 @@ fun AppManagerView(
     onUninstall: (String) -> Unit,
     onExtractApk: (InstalledApp) -> Unit,
     onOpenPlayStore: (String) -> Unit,
+    onOpenRemote: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    var selectedFilter by remember { mutableStateOf(AppCategoryFilter.USER) }
+    var selectedFilter by remember { mutableStateOf(AppCategoryFilter.ALL) }
     var selectedAppForMenu by remember { mutableStateOf<InstalledApp?>(null) }
     val clipboardManager = LocalClipboardManager.current
-
-    val userAppsCount = remember(apps) { apps.count { !it.isSystemApp } }
-    val systemAppsCount = remember(apps) { apps.count { it.isSystemApp } }
+    val haptic = LocalHapticFeedback.current
 
     val filteredApps = remember(apps, searchQuery, selectedFilter) {
         apps.filter { app ->
@@ -65,213 +66,238 @@ fun AppManagerView(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-    ) {
-        // 1. Search Bar & Refresh Button
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 14.dp, vertical = 6.dp)
         ) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
+            // 1. Search Bar with Filter Icon (Screenshot 3 style)
+            Surface(
                 modifier = Modifier
-                    .weight(1f)
+                    .fillMaxWidth()
                     .height(48.dp),
-                placeholder = { Text("Search installed TV apps...", color = TextMuted, fontSize = 13.sp) },
-                leadingIcon = {
+                shape = RoundedCornerShape(24.dp),
+                color = AtvSearchBg,
+                border = androidx.compose.foundation.BorderStroke(1.dp, RemoteBorderColor)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = "Search",
-                        tint = TextMuted,
-                        modifier = Modifier.size(18.dp)
+                        tint = AtvTextSecondary,
+                        modifier = Modifier.size(20.dp)
                     )
-                },
-                trailingIcon = {
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    TextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Search", color = AtvTextSecondary, fontSize = 14.sp) },
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedTextColor = AtvTextPrimary,
+                            unfocusedTextColor = AtvTextPrimary,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent
+                        ),
+                        singleLine = true
+                    )
+
                     if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(imageVector = Icons.Default.Close, contentDescription = "Clear", tint = TextMuted)
+                        IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(28.dp)) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear", tint = AtvTextSecondary, modifier = Modifier.size(16.dp))
                         }
                     }
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = AccentCyan,
-                    unfocusedBorderColor = DpadBorderColor,
-                    focusedContainerColor = DarkSurface,
-                    unfocusedContainerColor = DarkSurface,
-                    focusedTextColor = TextPrimary,
-                    unfocusedTextColor = TextPrimary
-                )
-            )
 
-            IconButton(
-                onClick = onRefresh,
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(DarkSurface)
-                    .border(1.dp, DpadBorderColor, RoundedCornerShape(12.dp))
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), color = AccentCyan, strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh apps", tint = AccentCyan)
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // 2. Filter Category Pills (User / System / All)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            AppFilterPill(
-                label = "User (${userAppsCount})",
-                isSelected = selectedFilter == AppCategoryFilter.USER,
-                onClick = { selectedFilter = AppCategoryFilter.USER }
-            )
-            AppFilterPill(
-                label = "System (${systemAppsCount})",
-                isSelected = selectedFilter == AppCategoryFilter.SYSTEM,
-                onClick = { selectedFilter = AppCategoryFilter.SYSTEM }
-            )
-            AppFilterPill(
-                label = "All (${apps.size})",
-                isSelected = selectedFilter == AppCategoryFilter.ALL,
-                onClick = { selectedFilter = AppCategoryFilter.ALL }
-            )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // 3. App List Area
-        if (filteredApps.isEmpty() && !isLoading) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        imageVector = Icons.Default.Apps,
-                        contentDescription = null,
-                        tint = TextMuted,
-                        modifier = Modifier.size(44.dp)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = if (searchQuery.isNotEmpty()) "No apps matching '$searchQuery'" else "No apps found in this category",
-                        color = TextMuted,
-                        fontSize = 13.sp
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(
-                        onClick = onRefresh,
-                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceRaised),
-                        shape = RoundedCornerShape(10.dp)
+                    // Filter toggle
+                    IconButton(
+                        onClick = {
+                            selectedFilter = when (selectedFilter) {
+                                AppCategoryFilter.ALL -> AppCategoryFilter.USER
+                                AppCategoryFilter.USER -> AppCategoryFilter.SYSTEM
+                                AppCategoryFilter.SYSTEM -> AppCategoryFilter.ALL
+                            }
+                        },
+                        modifier = Modifier.size(32.dp)
                     ) {
-                        Text("Reload Apps List", color = AccentCyan, fontSize = 13.sp)
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = "Filter",
+                            tint = if (selectedFilter != AppCategoryFilter.ALL) AtvAccentBlue else AtvTextSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(filteredApps, key = { it.packageName }) { app ->
-                    InstalledAppItem(
-                        app = app,
-                        onLaunchClick = { onLaunchApp(app.packageName) },
-                        onMenuClick = { selectedAppForMenu = app }
-                    )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // 2. Apps List (Screenshot 3)
+            if (filteredApps.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (isLoading) {
+                        CircularProgressIndicator(color = AtvAccentBlue, strokeWidth = 2.dp)
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = if (searchQuery.isNotEmpty()) "No apps matching '$searchQuery'" else "No installed apps found",
+                                color = AtvTextSecondary,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Button(
+                                onClick = onRefresh,
+                                colors = ButtonDefaults.buttonColors(containerColor = AtvButtonDark)
+                            ) {
+                                Text("Refresh Apps", color = AtvTextPrimary)
+                            }
+                        }
+                    }
                 }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(bottom = 80.dp)
+                ) {
+                    items(filteredApps, key = { it.packageName }) { app ->
+                        InstalledAppCard(
+                            app = app,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onLaunchApp(app.packageName)
+                            },
+                            onMenuClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                selectedAppForMenu = app
+                            }
+                        )
+                    }
+                }
+            }
+        }
+
+        // Floating Remote Button (Pill at bottom right, Screenshot 3)
+        Surface(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 20.dp, bottom = 20.dp)
+                .height(46.dp)
+                .clip(RoundedCornerShape(23.dp))
+                .clickable {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onOpenRemote()
+                }
+                .testTag("apps_floating_remote_btn"),
+            shape = RoundedCornerShape(23.dp),
+            color = AtvButtonDark,
+            shadowElevation = 6.dp,
+            border = androidx.compose.foundation.BorderStroke(1.dp, AtvDividerLine)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SettingsRemote,
+                    contentDescription = "Remote Control",
+                    tint = AtvTextPrimary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Remote",
+                    color = AtvTextPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp
+                )
             }
         }
     }
 
-    // App Detail Action Bottom Sheet / Alert Dialog
+    // App Options Bottom Sheet / Dialog
     selectedAppForMenu?.let { app ->
         AlertDialog(
             onDismissRequest = { selectedAppForMenu = null },
-            containerColor = DarkSurfaceRaised,
-            shape = RoundedCornerShape(18.dp),
+            containerColor = AtvSheetDark,
+            shape = RoundedCornerShape(20.dp),
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier
-                            .size(42.dp)
+                            .size(44.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(if (app.isSystemApp) Color(0xFF6B7280).copy(alpha = 0.2f) else AccentCyan.copy(alpha = 0.2f)),
+                            .background(AtvButtonDark),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = if (app.isSystemApp) Icons.Default.SettingsApplications else Icons.Default.Tv,
-                            contentDescription = null,
-                            tint = if (app.isSystemApp) TextMuted else AccentCyan,
-                            modifier = Modifier.size(24.dp)
+                        Text(
+                            text = app.appName.firstOrNull()?.uppercase() ?: "A",
+                            color = AtvAccentBlue,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 20.sp
                         )
                     }
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
-                        Text(app.appName, color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        Text(app.packageName, color = TextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                        Text(app.appName, color = AtvTextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(app.packageName, color = AtvTextSecondary, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
                     }
                 }
             },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Open App on TV
                     AppActionItem(
                         icon = Icons.Default.PlayArrow,
-                        title = "Launch App on TV",
-                        subtitle = "Opens application immediately on TV",
-                        color = AccentCyan,
+                        title = "Open App",
+                        subtitle = "Launch on TV display",
+                        color = AtvAccentBlue,
                         onClick = {
                             onLaunchApp(app.packageName)
                             selectedAppForMenu = null
                         }
                     )
-
-                    // Force Stop
                     AppActionItem(
                         icon = Icons.Default.Close,
                         title = "Force Stop",
-                        subtitle = "Kills running background instance",
+                        subtitle = "Terminate process immediately",
                         color = Color(0xFFF59E0B),
                         onClick = {
                             onForceStop(app.packageName)
                             selectedAppForMenu = null
                         }
                     )
-
-                    // Clear Data
                     AppActionItem(
                         icon = Icons.Default.CleaningServices,
                         title = "Clear Data & Cache",
-                        subtitle = "Resets application storage & cache",
+                        subtitle = "Reset application data",
                         color = Color(0xFFF97316),
                         onClick = {
                             onClearData(app.packageName)
                             selectedAppForMenu = null
                         }
                     )
-
-                    // Extract APK
                     AppActionItem(
                         icon = Icons.Default.FileDownload,
                         title = "Extract APK to TV",
@@ -282,36 +308,21 @@ fun AppManagerView(
                             selectedAppForMenu = null
                         }
                     )
-
-                    // Open in Play Store
                     AppActionItem(
                         icon = Icons.Default.Shop,
-                        title = "Open in Play Store on TV",
-                        subtitle = "Shows TV Play Store listing",
+                        title = "Open in Play Store",
+                        subtitle = "View in TV Store",
                         color = Color(0xFF10B981),
                         onClick = {
                             onOpenPlayStore(app.packageName)
                             selectedAppForMenu = null
                         }
                     )
-
-                    // Copy Package Name
-                    AppActionItem(
-                        icon = Icons.Default.ContentCopy,
-                        title = "Copy Package Name",
-                        subtitle = app.packageName,
-                        onClick = {
-                            clipboardManager.setText(AnnotatedString(app.packageName))
-                            selectedAppForMenu = null
-                        }
-                    )
-
-                    // Uninstall (or Disable)
                     AppActionItem(
                         icon = Icons.Default.Delete,
-                        title = if (app.isSystemApp) "Uninstall System App" else "Uninstall App",
-                        subtitle = if (app.isSystemApp) "Removes system app for current user" else "Completely uninstalls app from TV",
-                        color = Color(0xFFEF4444),
+                        title = "Uninstall App",
+                        subtitle = "Remove from Android TV",
+                        color = AtvPowerRed,
                         onClick = {
                             onUninstall(app.packageName)
                             selectedAppForMenu = null
@@ -321,7 +332,7 @@ fun AppManagerView(
             },
             confirmButton = {
                 TextButton(onClick = { selectedAppForMenu = null }) {
-                    Text("Close", color = TextMuted)
+                    Text("Cancel", color = AtvTextSecondary)
                 }
             }
         )
@@ -329,50 +340,25 @@ fun AppManagerView(
 }
 
 @Composable
-private fun AppFilterPill(
-    label: String,
-    isSelected: Boolean,
-    onClick: () -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(10.dp),
-        color = if (isSelected) AccentCyan else DarkSurface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) AccentCyan else DpadBorderColor)
-    ) {
-        Text(
-            text = label,
-            color = if (isSelected) DarkBackground else TextMuted,
-            fontSize = 12.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-        )
-    }
-}
-
-@Composable
-private fun InstalledAppItem(
+private fun InstalledAppCard(
     app: InstalledApp,
-    onLaunchClick: () -> Unit,
+    onClick: () -> Unit,
     onMenuClick: () -> Unit
 ) {
-    val isSystem = app.isSystemApp
-    val accentColor = if (isSystem) Color(0xFF94A3B8) else AccentCyan
-
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onMenuClick)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
             .testTag("app_item_${app.packageName}"),
         shape = RoundedCornerShape(14.dp),
-        color = DarkSurface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, DpadBorderColor)
+        color = AtvSheetDark,
+        border = androidx.compose.foundation.BorderStroke(1.dp, RemoteBorderColor)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -380,99 +366,48 @@ private fun InstalledAppItem(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
+                // App Logo / Avatar
                 Box(
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(44.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .background(accentColor.copy(alpha = 0.15f)),
+                        .background(AtvButtonDark),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = if (isSystem) Icons.Default.SettingsApplications else Icons.Default.Tv,
-                        contentDescription = null,
-                        tint = accentColor,
-                        modifier = Modifier.size(24.dp)
+                    Text(
+                        text = app.appName.firstOrNull()?.uppercase() ?: "A",
+                        color = AtvTextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
                     )
                 }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(14.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = app.appName,
-                            color = TextPrimary,
-                            fontSize = 14.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        if (isSystem) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = Color(0xFF374151)
-                            ) {
-                                Text(
-                                    text = "System",
-                                    color = Color(0xFF9CA3AF),
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(2.dp))
-
                     Text(
-                        text = app.packageName,
-                        color = TextMuted,
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
+                        text = app.appName,
+                        color = AtvTextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 1
                     )
-
-                    Spacer(modifier = Modifier.height(2.dp))
-
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
-                        text = "v${app.versionName} • ${app.sizeString}",
-                        color = TextMuted.copy(alpha = 0.8f),
-                        fontSize = 10.5.sp
+                        text = "${app.versionName} - ${app.sizeString}",
+                        color = AtvTextSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1
                     )
                 }
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // Quick Launch Button
-                IconButton(
-                    onClick = onLaunchClick,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(AccentCyan.copy(alpha = 0.15f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = "Launch",
-                        tint = AccentCyan,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(4.dp))
-
-                // Options Menu Button
-                IconButton(
-                    onClick = onMenuClick,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Options",
-                        tint = TextMuted
-                    )
-                }
+            IconButton(onClick = onMenuClick, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "App options",
+                    tint = AtvTextSecondary
+                )
             }
         }
     }
@@ -483,28 +418,22 @@ private fun AppActionItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     subtitle: String,
-    color: Color = TextPrimary,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    color: Color = AtvTextPrimary
 ) {
-    Surface(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onClick),
-        color = Color.Transparent
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp, horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 8.dp, horizontal = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(imageVector = icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(text = title, color = color, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                Text(text = subtitle, color = TextMuted, fontSize = 10.5.sp)
-            }
+        Icon(imageVector = icon, contentDescription = title, tint = color, modifier = Modifier.size(22.dp))
+        Spacer(modifier = Modifier.width(12.dp))
+        Column {
+            Text(title, color = AtvTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(subtitle, color = AtvTextSecondary, fontSize = 11.sp)
         }
     }
 }

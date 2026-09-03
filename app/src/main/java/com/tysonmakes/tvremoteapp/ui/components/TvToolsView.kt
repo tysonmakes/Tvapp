@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -15,13 +16,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tysonmakes.tvremoteapp.model.ATV_GRID_TOOLS
@@ -33,6 +34,12 @@ fun TvToolsView(
     onToolClick: (TvToolAction) -> Unit,
     onInstallApkClick: () -> Unit,
     onUploadFileClick: () -> Unit,
+    onToggleNowPlaying: () -> Unit,
+    onSkipNext: () -> Unit,
+    onOpenRemote: () -> Unit,
+    isPlaying: Boolean,
+    nowPlayingTitle: String,
+    nowPlayingApp: String,
     isExecuting: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -41,40 +48,10 @@ fun TvToolsView(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 4.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Bolt,
-                    contentDescription = null,
-                    tint = AccentCyan,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Advanced TV Tools & Controls",
-                    color = TextPrimary,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-            }
-
-            if (isExecuting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    color = AccentCyan,
-                    strokeWidth = 2.dp
-                )
-            }
-        }
-
+        // Grid of 11 Tools (Screenshot 4)
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -97,6 +74,145 @@ fun TvToolsView(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // -------------------------------------------------------------
+        // PERSISTENT NOW PLAYING / MINI MEDIA BAR (Screenshot 4)
+        // -------------------------------------------------------------
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(64.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .testTag("tools_mini_player"),
+            shape = RoundedCornerShape(16.dp),
+            color = AtvMiniPlayerBg,
+            border = androidx.compose.foundation.BorderStroke(1.dp, RemoteBorderColor)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Video thumbnail / Album art
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 44.dp, height = 44.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF263042)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SmartDisplay,
+                            contentDescription = null,
+                            tint = AtvAccentBlue,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = nowPlayingTitle,
+                            color = AtvTextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = nowPlayingApp,
+                            color = AtvTextSecondary,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Play/Pause button
+                IconButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onToggleNowPlaying()
+                    },
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(AtvAccentBlue)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = "Play or Pause",
+                        tint = AtvTextPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Next Track button
+                IconButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onSkipNext()
+                    },
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = "Next Track",
+                        tint = AtvTextPrimary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(4.dp))
+
+                // Floating Remote Button (docked inside bar for quick launch)
+                Surface(
+                    modifier = Modifier
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onOpenRemote()
+                        }
+                        .testTag("floating_remote_btn"),
+                    shape = RoundedCornerShape(12.dp),
+                    color = AtvButtonDark,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, AtvDividerLine)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SettingsRemote,
+                            contentDescription = "Remote Control",
+                            tint = AtvTextPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -105,76 +221,56 @@ private fun TvGridToolCard(
     tool: TvToolAction,
     onClick: () -> Unit
 ) {
-    val toolColor = Color(tool.colorHex)
-    val iconVector: ImageVector = when (tool.icon) {
-        "install" -> Icons.Default.DownloadForOffline
-        "upload" -> Icons.Default.UploadFile
-        "folder" -> Icons.Default.Folder
-        "live_tv" -> Icons.Default.LiveTv
-        "cast" -> Icons.Default.Cast
+    val iconVector: ImageVector = when (tool.id) {
+        "install_apk" -> Icons.Default.DownloadForOffline
+        "upload_file" -> Icons.Default.UploadFile
+        "file_manager" -> Icons.Default.Folder
+        "channels" -> Icons.Default.LiveTv
+        "screen_mirror" -> Icons.Default.Cast
         "gamepad" -> Icons.Default.SportsEsports
         "screenshot" -> Icons.Default.CameraAlt
-        "videocam" -> Icons.Default.Videocam
-        "delete" -> Icons.Default.DeleteOutline
-        "auto_awesome" -> Icons.Default.AutoAwesome
-        "power_settings_new" -> Icons.Default.PowerSettingsNew
+        "screen_record" -> Icons.Default.Videocam
+        "clear_cache" -> Icons.Default.DeleteOutline
+        "screensaver" -> Icons.Default.AutoAwesome
+        "power_menu" -> Icons.Default.PowerSettingsNew
         else -> Icons.Default.Build
     }
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .height(86.dp)
-            .shadow(4.dp, RoundedCornerShape(14.dp), spotColor = toolColor.copy(alpha = 0.2f))
+            .height(72.dp)
+            .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
             .testTag("grid_tool_${tool.id}"),
         shape = RoundedCornerShape(14.dp),
-        color = DarkSurface,
-        border = androidx.compose.foundation.BorderStroke(1.dp, DpadBorderColor)
+        color = AtvButtonDark,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AtvDividerLine)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
+                .padding(horizontal = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(toolColor.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = iconVector,
-                    contentDescription = tool.title,
-                    tint = toolColor,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+            Icon(
+                imageVector = iconVector,
+                contentDescription = tool.title,
+                tint = AtvTextPrimary,
+                modifier = Modifier.size(24.dp)
+            )
 
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
-            Column(
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = tool.title,
-                    color = TextPrimary,
-                    fontSize = 13.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = tool.description,
-                    color = TextMuted,
-                    fontSize = 10.5.sp,
-                    maxLines = 2,
-                    lineHeight = 13.sp
-                )
-            }
+            Text(
+                text = tool.title,
+                color = AtvTextPrimary,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                lineHeight = 17.sp,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

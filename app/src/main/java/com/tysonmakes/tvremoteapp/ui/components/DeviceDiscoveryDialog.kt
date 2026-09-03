@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -45,7 +46,7 @@ fun DeviceDiscoveryDialog(
     var manualIp by remember { mutableStateOf("") }
     var manualPort by remember { mutableStateOf("5555") }
     var manualName by remember { mutableStateOf("My TV") }
-    var subnetPrefix by remember { mutableStateOf("192.168.1.") }
+    var subnetPrefix by remember { mutableStateOf(com.tysonmakes.tvremoteapp.adb.DeviceScanner.getLocalSubnetPrefix()) }
     var showHelpGuide by remember { mutableStateOf(false) }
 
     Dialog(
@@ -370,7 +371,7 @@ fun DeviceDiscoveryDialog(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Icon(Icons.Default.HelpOutline, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
+                                        Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null, tint = AccentAmber, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text("How to enable ADB on Android TV / Fire TV", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                     }

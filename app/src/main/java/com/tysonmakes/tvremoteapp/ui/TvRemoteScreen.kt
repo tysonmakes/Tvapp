@@ -5,32 +5,26 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Input
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.tysonmakes.tvremoteapp.model.RemoteKeycodes
@@ -45,9 +39,8 @@ fun TvRemoteScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val haptic = LocalHapticFeedback.current
-    val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    var inputText by remember { mutableStateOf("") }
+    var showOverflowMenu by remember { mutableStateOf(false) }
 
     val isConnected = uiState.connectionStatus is ConnectionStatus.Connected
 
@@ -94,75 +87,166 @@ fun TvRemoteScreen(
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = DarkBackground,
-        contentWindowInsets = WindowInsets.safeDrawing
+        containerColor = AtvCanvasDark,
+        contentWindowInsets = WindowInsets.safeDrawing,
+        topBar = {
+            // Authentic atvTools Top Bar: Back, TV Name, Status, Three-Dots Menu
+            AtvTopAppBar(
+                tvName = uiState.connectedDevice?.name ?: "Family Room TV",
+                statusText = when (uiState.connectionStatus) {
+                    is ConnectionStatus.Connected -> "CONNECTED"
+                    is ConnectionStatus.Connecting -> "CONNECTING..."
+                    is ConnectionStatus.Error -> "ERROR"
+                    ConnectionStatus.Disconnected -> "DISCONNECTED"
+                },
+                statusColor = when (uiState.connectionStatus) {
+                    is ConnectionStatus.Connected -> Color(0xFF10B981)
+                    is ConnectionStatus.Connecting -> Color(0xFFFF9100)
+                    is ConnectionStatus.Error -> Color(0xFFEF4444)
+                    ConnectionStatus.Disconnected -> AtvTextSecondary
+                },
+                onBackClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    if (uiState.isRemoteSheetOpen) {
+                        viewModel.setRemoteSheetOpen(false)
+                    } else if (uiState.currentTab == RemoteTab.FILES || uiState.currentTab == RemoteTab.GAMEPAD) {
+                        viewModel.setTab(RemoteTab.TOOLS)
+                    } else {
+                        viewModel.sendKey(RemoteKeycodes.BACK)
+                    }
+                },
+                onMenuClick = { showOverflowMenu = true },
+                isMenuExpanded = showOverflowMenu,
+                onDismissMenu = { showOverflowMenu = false },
+                onSelectDeviceDiscovery = {
+                    showOverflowMenu = false
+                    viewModel.setDiscoveryOpen(true)
+                },
+                onSelectSettings = {
+                    showOverflowMenu = false
+                    viewModel.setSettingsOpen(true)
+                },
+                onSelectChannels = {
+                    showOverflowMenu = false
+                    viewModel.setChannelsDialogOpen(true)
+                },
+                onSelectPowerMenu = {
+                    showOverflowMenu = false
+                    viewModel.setPowerMenuOpen(true)
+                },
+                onDisconnect = {
+                    showOverflowMenu = false
+                    viewModel.disconnect()
+                }
+            )
+        },
+        bottomBar = {
+            // Bottom 4-Tab Navigation Bar (Only visible when Remote sheet is closed)
+            if (!uiState.isRemoteSheetOpen && uiState.currentTab != RemoteTab.FILES && uiState.currentTab != RemoteTab.GAMEPAD) {
+                AtvBottomNavigationBar(
+                    selectedTab = when (uiState.currentTab) {
+                        RemoteTab.TOOLS -> 0
+                        RemoteTab.APPS -> 1
+                        RemoteTab.TERMINAL -> 2
+                        RemoteTab.INFO -> 3
+                        else -> 0
+                    },
+                    onTabSelected = { index ->
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        when (index) {
+                            0 -> viewModel.setTab(RemoteTab.TOOLS)
+                            1 -> viewModel.setTab(RemoteTab.APPS)
+                            2 -> viewModel.setTab(RemoteTab.TERMINAL)
+                            3 -> viewModel.setTab(RemoteTab.INFO)
+                        }
+                    }
+                )
+            }
+        }
     ) { innerPadding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 14.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // 1. Top Header Bar: Device Status, Settings, TV Power
-            TopDeviceHeader(
-                uiState = uiState,
-                onOpenDiscovery = { viewModel.setDiscoveryOpen(true) },
-                onOpenSettings = { viewModel.setSettingsOpen(true) },
-                onPowerClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    viewModel.setPowerMenuOpen(true)
+            AnimatedContent(
+                targetState = uiState.isRemoteSheetOpen,
+                transitionSpec = {
+                    slideInVertically { height -> height } + fadeIn() togetherWith
+                            slideOutVertically { height -> height } + fadeOut()
                 },
-                onDisconnect = { viewModel.disconnect() }
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // 2. Primary Navigation Shortcut Pill Bar (Back, Home, Menu, Voice, Input)
-            PrimaryNavigationPillBar(
-                onKeySend = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    viewModel.sendKey(it)
-                }
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // 3. Horizontal Scrollable Tab Selector Bar (Remote, Files, Apps, Tools, Gamepad, Info...)
-            RemoteTabSelectorBar(
-                selectedTab = uiState.currentTab,
-                onTabSelect = { tab ->
-                    viewModel.setTab(tab)
-                    if (tab == RemoteTab.FILES && uiState.tvFiles.isEmpty()) {
-                        viewModel.fetchTvFiles(uiState.currentTvPath.ifEmpty { "/sdcard" })
-                    }
-                }
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // 4. Center Dynamic Arena (Remote D-pad / Interactive Files / Apps / Tools / Gamepad / Info / Trackpad / Numpad / Shell)
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                AnimatedContent(
-                    targetState = uiState.currentTab,
-                    transitionSpec = {
-                        fadeIn() togetherWith fadeOut()
-                    },
-                    label = "remote_tab_content"
-                ) { targetTab ->
-                    when (targetTab) {
-                        RemoteTab.CONTROLS -> {
-                            DpadControl(
-                                onKeySend = { viewModel.sendKey(it) },
-                                onStartRepeat = { viewModel.startKeyRepeat(it) },
-                                onStopRepeat = { viewModel.stopKeyRepeat() },
-                                hapticLevel = uiState.settings.hapticIntensity
+                label = "MainRemoteSheetTransition"
+            ) { isRemoteSheet ->
+                if (isRemoteSheet) {
+                    // Authentic atvTools Remote Control View (Screenshots 1 & 2)
+                    ModernTvRemoteView(
+                        onKeySend = { viewModel.sendKey(it) },
+                        onOpenNumpad = { viewModel.setChannelsDialogOpen(true) },
+                        onOpenTextInput = { viewModel.setTextInputDialogOpen(true) },
+                        onOpenPowerMenu = { viewModel.setPowerMenuOpen(true) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    // Selected Tab Content View
+                    when (uiState.currentTab) {
+                        RemoteTab.TOOLS -> {
+                            TvToolsView(
+                                onToolClick = { viewModel.handleGridToolClick(it) },
+                                onInstallApkClick = { apkPickerLauncher.launch("application/vnd.android.package-archive") },
+                                onUploadFileClick = { fileUploadLauncher.launch("*/*") },
+                                onToggleNowPlaying = { viewModel.toggleNowPlayingMedia() },
+                                onSkipNext = { viewModel.skipNextMedia() },
+                                onOpenRemote = { viewModel.setRemoteSheetOpen(true) },
+                                isPlaying = uiState.isNowPlayingPlaying,
+                                nowPlayingTitle = uiState.nowPlayingTitle,
+                                nowPlayingApp = uiState.nowPlayingApp,
+                                isExecuting = uiState.isExecutingTool
                             )
+                        }
+                        RemoteTab.APPS -> {
+                            AppManagerView(
+                                apps = uiState.installedApps,
+                                isLoading = uiState.isAppsLoading,
+                                onRefresh = { viewModel.fetchInstalledApps() },
+                                onLaunchApp = { viewModel.launchApp(it) },
+                                onForceStop = { viewModel.forceStopApp(it) },
+                                onClearData = { viewModel.clearAppData(it) },
+                                onUninstall = { viewModel.uninstallApp(it) },
+                                onExtractApk = { viewModel.extractApk(it) },
+                                onOpenPlayStore = { viewModel.openPlayStore(it) },
+                                onOpenRemote = { viewModel.setRemoteSheetOpen(true) }
+                            )
+                        }
+                        RemoteTab.TERMINAL -> {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                AdbTerminalView(
+                                    outputLogs = uiState.consoleLogs,
+                                    onExecuteCommand = { viewModel.executeShell(it) },
+                                    onClearLogs = { viewModel.clearLogs() }
+                                )
+                                // Floating Remote Button
+                                FloatingRemoteButton(
+                                    onClick = { viewModel.setRemoteSheetOpen(true) },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(20.dp)
+                                )
+                            }
+                        }
+                        RemoteTab.INFO -> {
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                DeviceInfoView(
+                                    telemetry = uiState.telemetry,
+                                    onRefresh = { viewModel.fetchDeviceTelemetry() }
+                                )
+                                // Floating Remote Button
+                                FloatingRemoteButton(
+                                    onClick = { viewModel.setRemoteSheetOpen(true) },
+                                    modifier = Modifier
+                                        .align(Alignment.BottomEnd)
+                                        .padding(20.dp)
+                                )
+                            }
                         }
                         RemoteTab.FILES -> {
                             FileManagerView(
@@ -178,94 +262,60 @@ fun TvRemoteScreen(
                                 onRefresh = { viewModel.fetchTvFiles(uiState.currentTvPath.ifEmpty { "/sdcard" }) }
                             )
                         }
-                        RemoteTab.APPS -> {
-                            AppManagerView(
-                                apps = uiState.installedApps,
-                                isLoading = uiState.isAppsLoading,
-                                onRefresh = { viewModel.fetchInstalledApps() },
-                                onLaunchApp = { viewModel.launchApp(it) },
-                                onForceStop = { viewModel.forceStopApp(it) },
-                                onClearData = { viewModel.clearAppData(it) },
-                                onUninstall = { viewModel.uninstallApp(it) },
-                                onExtractApk = { viewModel.extractApk(it) },
-                                onOpenPlayStore = { viewModel.openPlayStore(it) }
-                            )
-                        }
-                        RemoteTab.TOOLS -> {
-                            TvToolsView(
-                                onToolClick = { viewModel.handleGridToolClick(it) },
-                                onInstallApkClick = {
-                                    apkPickerLauncher.launch("application/vnd.android.package-archive")
-                                },
-                                onUploadFileClick = {
-                                    fileUploadLauncher.launch("*/*")
-                                },
-                                isExecuting = uiState.isExecutingTool
-                            )
-                        }
                         RemoteTab.GAMEPAD -> {
                             GamepadControl(
                                 onKeySend = { viewModel.sendKey(it) }
                             )
                         }
-                        RemoteTab.INFO -> {
-                            DeviceInfoView(
-                                telemetry = uiState.telemetry,
-                                onRefresh = { viewModel.fetchDeviceTelemetry() }
-                            )
-                        }
-                        RemoteTab.TRACKPAD -> {
-                            TrackpadControl(
-                                onKeySend = { viewModel.sendKey(it) }
-                            )
-                        }
-                        RemoteTab.NUMPAD -> {
-                            NumpadView(
-                                onKeySend = { viewModel.sendKey(it) }
-                            )
-                        }
-                        RemoteTab.TERMINAL -> {
-                            AdbTerminalView(
-                                outputLogs = uiState.consoleLogs,
-                                onExecuteCommand = { viewModel.executeShell(it) },
-                                onClearLogs = { viewModel.clearLogs() }
+                        else -> {
+                            TvToolsView(
+                                onToolClick = { viewModel.handleGridToolClick(it) },
+                                onInstallApkClick = { apkPickerLauncher.launch("application/vnd.android.package-archive") },
+                                onUploadFileClick = { fileUploadLauncher.launch("*/*") },
+                                onToggleNowPlaying = { viewModel.toggleNowPlayingMedia() },
+                                onSkipNext = { viewModel.skipNextMedia() },
+                                onOpenRemote = { viewModel.setRemoteSheetOpen(true) },
+                                isPlaying = uiState.isNowPlayingPlaying,
+                                nowPlayingTitle = uiState.nowPlayingTitle,
+                                nowPlayingApp = uiState.nowPlayingApp,
+                                isExecuting = uiState.isExecutingTool
                             )
                         }
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // 5. Bottom Smart Keyboard / Text Transmitter Bar
-            BottomKeyboardTransmitter(
-                inputText = inputText,
-                onTextChanged = { inputText = it },
-                onSendText = {
-                    if (inputText.isNotBlank()) {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        viewModel.sendText(inputText)
-                        inputText = ""
-                    }
-                },
-                onPasteClipboard = {
-                    clipboardManager.getText()?.text?.let { clip ->
-                        inputText = clip
-                    }
-                },
-                statusMessage = uiState.statusMessage,
-                isConnected = isConnected
-            )
         }
     }
 
-    // Dialog: File Transfer / APK Install Progress
+    // -------------------------------------------------------------
+    // DIALOGS & OVERLAYS
+    // -------------------------------------------------------------
+
+    // Channels / TV Input Dialog
+    ChannelsDialog(
+        isOpen = uiState.isChannelsDialogOpen,
+        onDismiss = { viewModel.setChannelsDialogOpen(false) },
+        onSelectInput = { option ->
+            viewModel.executeShell(option.command)
+        }
+    )
+
+    // Text & Keyboard Input Dialog
+    TextInputDialog(
+        isOpen = uiState.isTextInputDialogOpen,
+        onDismiss = { viewModel.setTextInputDialogOpen(false) },
+        onSendText = { text ->
+            viewModel.sendText(text)
+        }
+    )
+
+    // File Transfer / APK Install Progress Dialog
     FileTransferDialog(
         transferState = uiState.fileTransferState,
         onDismiss = { viewModel.dismissFileTransfer() }
     )
 
-    // Dialog: Network Scan & Manual Discovery
+    // Network Scan & Manual Discovery Dialog
     DeviceDiscoveryDialog(
         isOpen = uiState.isDiscoveryOpen,
         isScanning = uiState.isScanning,
@@ -278,7 +328,7 @@ fun TvRemoteScreen(
         onDeleteDevice = { viewModel.deleteDevice(it) }
     )
 
-    // Dialog: Latency & Remote Preferences
+    // Preferences & Settings Dialog
     RemoteSettingsDialog(
         isOpen = uiState.isSettingsOpen,
         settings = uiState.settings,
@@ -286,7 +336,7 @@ fun TvRemoteScreen(
         onUpdateSettings = { viewModel.updateSettings(it) }
     )
 
-    // Dialog: Power Menu
+    // Power Menu Dialog
     if (uiState.isPowerMenuOpen) {
         PowerMenuDialog(
             onDismiss = { viewModel.setPowerMenuOpen(false) },
@@ -306,7 +356,7 @@ fun TvRemoteScreen(
         )
     }
 
-    // Dialog: Screenshot Preview
+    // Screenshot Preview Dialog
     if (uiState.isScreenshotDialogOpen) {
         ScreenshotDialog(
             screenshotPath = uiState.lastScreenshotPath,
@@ -316,364 +366,211 @@ fun TvRemoteScreen(
 }
 
 @Composable
-private fun TopDeviceHeader(
-    uiState: TvRemoteUiState,
-    onOpenDiscovery: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onPowerClick: () -> Unit,
+private fun AtvTopAppBar(
+    tvName: String,
+    statusText: String,
+    statusColor: Color,
+    onBackClick: () -> Unit,
+    onMenuClick: () -> Unit,
+    isMenuExpanded: Boolean,
+    onDismissMenu: () -> Unit,
+    onSelectDeviceDiscovery: () -> Unit,
+    onSelectSettings: () -> Unit,
+    onSelectChannels: () -> Unit,
+    onSelectPowerMenu: () -> Unit,
     onDisconnect: () -> Unit
 ) {
-    val isConnected = uiState.connectionStatus is ConnectionStatus.Connected
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(DarkSurface)
-            .border(1.dp, DpadBorderColor, RoundedCornerShape(16.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = AtvCanvasDark
     ) {
-        // Device Info & Status Pill
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .clickable(onClick = onOpenDiscovery)
-                .padding(4.dp)
-                .testTag("device_header_pill")
-        ) {
-            // Live Status Indicator LED
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(
-                        when (uiState.connectionStatus) {
-                            is ConnectionStatus.Connected -> StatusConnected
-                            is ConnectionStatus.Connecting -> StatusConnecting
-                            is ConnectionStatus.Error -> StatusError
-                            ConnectionStatus.Disconnected -> StatusDisconnected
-                        }
-                    )
-            )
-
-            Spacer(modifier = Modifier.width(10.dp))
-
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = uiState.connectedDevice?.name ?: "Android TV",
-                        color = TextPrimary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Icon(
-                        imageVector = Icons.Default.ArrowDropDown,
-                        contentDescription = "Switch Device",
-                        tint = TextMuted,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                Text(
-                    text = when (uiState.connectionStatus) {
-                        is ConnectionStatus.Connected -> "${uiState.connectedDevice?.ip} • ${uiState.latencyMs}ms"
-                        is ConnectionStatus.Connecting -> "Connecting to ${uiState.connectionStatus.ip}..."
-                        is ConnectionStatus.Error -> "Connection error (Tap to retry)"
-                        ConnectionStatus.Disconnected -> "Disconnected (Tap to scan)"
-                    },
-                    color = when (uiState.connectionStatus) {
-                        is ConnectionStatus.Connected -> AccentCyan
-                        is ConnectionStatus.Error -> StatusError
-                        else -> TextMuted
-                    },
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-
-        // Action Icons (Tune & Power)
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            IconButton(
-                onClick = onOpenSettings,
-                modifier = Modifier
-                    .size(38.dp)
-                    .clip(CircleShape)
-                    .background(DarkSurfaceRaised)
-                    .testTag("settings_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Tune,
-                    contentDescription = "Settings",
-                    tint = TextPrimary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            IconButton(
-                onClick = onPowerClick,
-                modifier = Modifier
-                    .size(38.dp)
-                    .shadow(4.dp, CircleShape, spotColor = Color(0xFFEF4444))
-                    .clip(CircleShape)
-                    .background(Color(0xFFEF4444).copy(alpha = 0.15f))
-                    .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.5f), CircleShape)
-                    .testTag("power_button")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PowerSettingsNew,
-                    contentDescription = "Power Menu",
-                    tint = Color(0xFFEF4444),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun PrimaryNavigationPillBar(
-    onKeySend: (String) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(DarkSurface)
-            .border(1.dp, DpadBorderColor, RoundedCornerShape(14.dp))
-            .padding(vertical = 4.dp, horizontal = 6.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        QuickNavPill(
-            icon = Icons.AutoMirrored.Filled.ArrowBack,
-            label = "Back",
-            tag = "back",
-            onClick = { onKeySend(RemoteKeycodes.BACK) }
-        )
-        QuickNavPill(
-            icon = Icons.Default.Home,
-            label = "Home",
-            tag = "home",
-            onClick = { onKeySend(RemoteKeycodes.HOME) }
-        )
-        QuickNavPill(
-            icon = Icons.Default.Menu,
-            label = "Menu",
-            tag = "menu",
-            onClick = { onKeySend(RemoteKeycodes.MENU) }
-        )
-        QuickNavPill(
-            icon = Icons.Default.Mic,
-            label = "Voice",
-            tag = "voice",
-            onClick = { onKeySend(RemoteKeycodes.VOICE_ASSIST) }
-        )
-        QuickNavPill(
-            icon = Icons.AutoMirrored.Filled.Input,
-            label = "Input",
-            tag = "input",
-            onClick = { onKeySend(RemoteKeycodes.TV_INPUT) }
-        )
-    }
-}
-
-@Composable
-private fun QuickNavPill(
-    icon: ImageVector,
-    label: String,
-    tag: String,
-    onClick: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-            .testTag("quick_nav_$tag")
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            tint = AccentCyan,
-            modifier = Modifier.size(20.dp)
-        )
-        Spacer(modifier = Modifier.height(2.dp))
-        Text(
-            text = label,
-            color = TextMuted,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium
-        )
-    }
-}
-
-@Composable
-private fun RemoteTabSelectorBar(
-    selectedTab: RemoteTab,
-    onTabSelect: (RemoteTab) -> Unit
-) {
-    val scrollState = rememberScrollState()
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(DarkSurface)
-            .border(1.dp, DpadBorderColor, RoundedCornerShape(12.dp))
-            .horizontalScroll(scrollState)
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RemoteTab.entries.forEach { tab ->
-            val isSelected = selectedTab == tab
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isSelected) AccentCyan else Color.Transparent)
-                    .clickable { onTabSelect(tab) }
-                    .padding(horizontal = 14.dp, vertical = 7.dp)
-                    .testTag("tab_${tab.name.lowercase()}"),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = tab.title,
-                    color = if (isSelected) Color.Black else TextMuted,
-                    fontSize = 12.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun BottomKeyboardTransmitter(
-    inputText: String,
-    onTextChanged: (String) -> Unit,
-    onSendText: () -> Unit,
-    onPasteClipboard: () -> Unit,
-    statusMessage: String,
-    isConnected: Boolean
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            color = DarkSurface,
-            border = androidx.compose.foundation.BorderStroke(1.dp, DpadBorderColor)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Keyboard,
-                    contentDescription = null,
-                    tint = AccentCyan,
-                    modifier = Modifier.size(20.dp)
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                TextField(
-                    value = inputText,
-                    onValueChange = onTextChanged,
-                    placeholder = {
-                        Text(
-                            text = "Type text to TV...",
-                            color = TextMuted,
-                            fontSize = 13.sp
-                        )
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("tv_input_textfield"),
-                    singleLine = true,
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        focusedTextColor = TextPrimary,
-                        unfocusedTextColor = TextPrimary
-                    )
-                )
-
-                IconButton(
-                    onClick = onPasteClipboard,
-                    modifier = Modifier.size(34.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ContentPaste,
-                        contentDescription = "Paste Clipboard",
-                        tint = TextMuted,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-
-                IconButton(
-                    onClick = onSendText,
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(CircleShape)
-                        .background(if (inputText.isNotBlank()) AccentCyan else DarkSurfaceRaised)
-                        .testTag("send_text_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send",
-                        tint = if (inputText.isNotBlank()) Color.Black else TextMuted,
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        // Status Toast Micro-Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(
-                text = statusMessage,
-                color = AccentCyan,
-                fontSize = 11.sp,
-                maxLines = 1
-            )
-
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Left: Back Arrow
+            IconButton(onClick = onBackClick, modifier = Modifier.size(40.dp)) {
                 Icon(
-                    imageVector = Icons.Default.Bolt,
-                    contentDescription = null,
-                    tint = if (isConnected) Color(0xFFFBBF24) else TextMuted,
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(2.dp))
-                Text(
-                    text = if (isConnected) "ADB Turbo Stream" else "Offline",
-                    color = if (isConnected) Color(0xFFFBBF24) else TextMuted,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back",
+                    tint = AtvTextPrimary,
+                    modifier = Modifier.size(24.dp)
                 )
             }
+
+            // Center: TV Name & Subtitle Status (e.g. CONNECTED) - tap to switch/connect device
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onSelectDeviceDiscovery() }
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = tvName,
+                    color = AtvTextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = statusText,
+                    color = statusColor,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 10.5.sp,
+                    letterSpacing = 1.1.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+
+            // Right: Three dots menu
+            Box {
+                IconButton(onClick = onMenuClick, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "Options",
+                        tint = AtvTextPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                DropdownMenu(
+                    expanded = isMenuExpanded,
+                    onDismissRequest = onDismissMenu,
+                    modifier = Modifier.background(AtvSheetDark)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Select TV / Devices", color = AtvTextPrimary) },
+                        leadingIcon = { Icon(Icons.Default.Tv, contentDescription = null, tint = AtvAccentBlue) },
+                        onClick = onSelectDeviceDiscovery
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Channels & Inputs", color = AtvTextPrimary) },
+                        leadingIcon = { Icon(Icons.Default.LiveTv, contentDescription = null, tint = AtvAccentBlue) },
+                        onClick = onSelectChannels
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Settings & Preferences", color = AtvTextPrimary) },
+                        leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null, tint = AtvTextSecondary) },
+                        onClick = onSelectSettings
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Power Options", color = AtvPowerRed) },
+                        leadingIcon = { Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = AtvPowerRed) },
+                        onClick = onSelectPowerMenu
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Disconnect", color = AtvTextSecondary) },
+                        leadingIcon = { Icon(Icons.Default.LinkOff, contentDescription = null, tint = AtvTextSecondary) },
+                        onClick = onDisconnect
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AtvBottomNavigationBar(
+    selectedTab: Int,
+    onTabSelected: (Int) -> Unit
+) {
+    val tabs = listOf(
+        Pair("Tools", Icons.Default.Build),
+        Pair("Apps", Icons.Default.Apps),
+        Pair("Shell", Icons.Default.Android),
+        Pair("Info", Icons.Default.Info)
+    )
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(64.dp),
+        color = AtvCanvasDark,
+        border = androidx.compose.foundation.BorderStroke(0.5.dp, AtvDividerLine.copy(alpha = 0.3f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceAround
+        ) {
+            tabs.forEachIndexed { index, pair ->
+                val isSelected = selectedTab == index
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onTabSelected(index) }
+                        .padding(vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = pair.second,
+                        contentDescription = pair.first,
+                        tint = if (isSelected) AtvAccentBlue else AtvTextSecondary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = pair.first,
+                        color = if (isSelected) AtvAccentBlue else AtvTextSecondary,
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FloatingRemoteButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+
+    Surface(
+        modifier = modifier
+            .height(46.dp)
+            .clip(RoundedCornerShape(23.dp))
+            .clickable {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                onClick()
+            },
+        shape = RoundedCornerShape(23.dp),
+        color = AtvButtonDark,
+        shadowElevation = 6.dp,
+        border = androidx.compose.foundation.BorderStroke(1.dp, AtvDividerLine)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.SettingsRemote,
+                contentDescription = "Remote Control",
+                tint = AtvTextPrimary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Remote",
+                color = AtvTextPrimary,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp
+            )
         }
     }
 }

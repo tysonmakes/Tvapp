@@ -61,7 +61,15 @@ data class TvRemoteUiState(
     // Power Menu & Screenshot Dialogs
     val isPowerMenuOpen: Boolean = false,
     val isScreenshotDialogOpen: Boolean = false,
-    val lastScreenshotPath: String = "/sdcard/screenshot.png"
+    val lastScreenshotPath: String = "/sdcard/screenshot.png",
+
+    // atvTools Specific State
+    val isRemoteSheetOpen: Boolean = false,
+    val isChannelsDialogOpen: Boolean = false,
+    val isTextInputDialogOpen: Boolean = false,
+    val isNowPlayingPlaying: Boolean = true,
+    val nowPlayingTitle: String = "BHARAT GETS URANIUM...",
+    val nowPlayingApp: String = "YouTube"
 )
 
 class TvRemoteViewModel(application: Application) : AndroidViewModel(application) {
@@ -175,7 +183,12 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
             }
             appendLog("Establishing ADB socket connection with $ip:$port...")
 
-            when (val result = adbManager.connect(ip, port)) {
+            val result = adbManager.connect(ip, port) { statusHint ->
+                _uiState.update { it.copy(statusMessage = statusHint) }
+                appendLog(statusHint)
+            }
+
+            when (result) {
                 is AdbConnectionResult.Success -> {
                     val dev = TvDevice(ip = ip, port = port, name = name, lastConnected = System.currentTimeMillis())
                     val updatedSaved = _uiState.value.savedDevices.filter { it.ip != ip }.toMutableList()
@@ -192,12 +205,6 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                         )
                     }
                     appendLog("Successfully connected to $ip:$port (${result.latencyMs}ms)")
-                    
-                    // Fetch initial Telemetry in background after connection
-                    viewModelScope.launch(Dispatchers.IO) {
-                        delay(500)
-                        fetchDeviceTelemetry()
-                    }
                 }
                 is AdbConnectionResult.Failure -> {
                     _uiState.update {
@@ -240,6 +247,14 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                 val lastDev = _uiState.value.connectedDevice ?: _uiState.value.savedDevices.firstOrNull()
                 if (lastDev != null) {
                     adbManager.connect(lastDev.ip, lastDev.port)
+                } else {
+                    _uiState.update {
+                        it.copy(
+                            statusMessage = "Please connect to your Android TV first",
+                            isDiscoveryOpen = true
+                        )
+                    }
+                    return@launch
                 }
             }
 
@@ -1038,16 +1053,16 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
             }
             "clear_cache" -> {
                 executeTvTool(
-                    TvToolAction("clear_cache", "Boost Cache", "Freeing RAM", "", "am kill-all && sync")
+                    TvToolAction("clear_cache", "Clear cache", "Trimming cache & freeing memory", "", "pm trim-caches 999999999999 || am kill-all || sync")
                 )
             }
             "screensaver" -> {
                 executeTvTool(
-                    TvToolAction("screensaver", "Screensaver", "Activating screensaver", "", "am start -n com.android.systemui/.Somnambulator || cmd input keyevent 223")
+                    TvToolAction("screensaver", "Screensaver", "Activating Ambient Mode", "", "cmd input keyevent 223 || am start -n com.android.systemui/.Somnambulator")
                 )
             }
             "channels" -> {
-                sendKey(RemoteKeycodes.TV_INPUT)
+                setChannelsDialogOpen(true)
             }
             "screen_mirror" -> {
                 executeTvTool(
@@ -1191,6 +1206,28 @@ class TvRemoteViewModel(application: Application) : AndroidViewModel(application
                 fetchInstalledApps()
             }
         }
+    }
+
+    fun setRemoteSheetOpen(open: Boolean) {
+        _uiState.update { it.copy(isRemoteSheetOpen = open) }
+    }
+
+    fun setChannelsDialogOpen(open: Boolean) {
+        _uiState.update { it.copy(isChannelsDialogOpen = open) }
+    }
+
+    fun setTextInputDialogOpen(open: Boolean) {
+        _uiState.update { it.copy(isTextInputDialogOpen = open) }
+    }
+
+    fun toggleNowPlayingMedia() {
+        val next = !_uiState.value.isNowPlayingPlaying
+        _uiState.update { it.copy(isNowPlayingPlaying = next) }
+        sendKey(RemoteKeycodes.MEDIA_PLAY_PAUSE)
+    }
+
+    fun skipNextMedia() {
+        sendKey(RemoteKeycodes.MEDIA_NEXT)
     }
 
     fun setDiscoveryOpen(open: Boolean) {

@@ -59,5 +59,7 @@ dependencies {
     implementation(libs.dadb)
     implementation(libs.kotlinx.coroutines.android)
 
+    testImplementation("junit:junit:4.13.2")
+
     debugImplementation(libs.androidx.ui.tooling)
 }
